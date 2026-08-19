@@ -1,0 +1,34 @@
+{
+  "site": "hotgen.ai",
+  "separator": "^\\s*[=\\-]{5,}\\s*$",
+  "note_marker": "---",
+  "required": ["email", "aff"],
+  "ignore_bare_identifiers": false,
+  "fields": {
+    "aff_sub": {
+      "regex": "^(https://hotgen\\.ai/signin\\?share_code=[A-Z0-9]+)\\s+\\+\\d+\\s+Sub\\s*$",
+      "targets": {"aff": 1},
+      "const": {"balance": 84}
+    },
+    "aff_balance": {
+      "regex": "^(https://hotgen\\.ai/signin\\?share_code=[A-Z0-9]+)\\s+\\+\\d+\\s+(?:No Sub\\s+)?(\\d+)",
+      "targets": {"aff": 1, "balance": 2}
+    },
+    "aff": {
+      "regex": "^(https://hotgen\\.ai/signin\\?share_code=[A-Z0-9]+)"
+    },
+    "email": {
+      "regex": "^([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})$"
+    },
+    "password": {
+      "regex": "^(\\S{6,})$"
+    }
+  },
+  "marks": [],
+  "noise": [
+    "^Все по почте$",
+    "^NSFW Mode",
+    "^Make my love",
+    "^17 июня 2026 почта$"
+  ]
+}

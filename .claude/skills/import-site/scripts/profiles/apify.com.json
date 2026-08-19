@@ -1,0 +1,25 @@
+{
+  "site": "apify.com",
+  "separator": "^\\s*[=\\-]{5,}\\s*$",
+  "note_marker": "---",
+  "required": ["token", "balance", "login"],
+  "ignore_bare_identifiers": false,
+  "fields": {
+    "token": {"regex": "^(apify_api_[A-Za-z0-9_-]{20,})\\b"},
+    "login_email": {
+      "regex": "^([A-Za-z0-9][A-Za-z0-9._-]{3,})\\s*\\(([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})\\)",
+      "targets": {"login": 1, "email": 2}
+    },
+    "balance": {"regex": "^\\$(\\d+(?:[.,]\\d+)?)\\s*$", "cast": "float"},
+    "aff": {
+      "regex": "^(https://\\S*[?&](?:aff|ref|r|invite)=[\\w-]+)",
+      "if_missing": "(пусто — в документе аффилятной ссылки нет)"
+    }
+  },
+  "marks": [],
+  "noise": [
+    "^My Key$",
+    "^GitHub$",
+    "^https://apify\\.com/?$"
+  ]
+}

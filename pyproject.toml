@@ -1,0 +1,23 @@
+[project]
+name = "ai-email-code"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.141.1",
+    "langchain>=1.2.6",
+    "langchain-community>=0.4.1",
+    "langchain-ollama>=1.0.1",
+    "langgraph>=1.0.6",
+    "langgraph-checkpoint-postgres>=3.0.3",
+    "loguru>=0.7.3",
+    "psycopg[binary,pool]>=3.3.2",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+    "python-dotenv>=1.2.1",
+    "requests>=2.32.3",
+    "supabase>=2.31.0",
+    "tavily-python>=0.7.19",
+    "uvicorn[standard]>=0.52.3",
+]

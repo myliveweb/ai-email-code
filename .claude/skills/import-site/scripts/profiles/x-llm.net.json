@@ -1,0 +1,47 @@
+{
+  "site": "x-llm.net",
+  "separator": "^\\s*[=\\-]{5,}\\s*$",
+  "note_marker": "---",
+  "required": ["login", "token", "balance", "aff"],
+  "fields": {
+    "login": {
+      "regex": "^([A-Za-z0-9._-]{3,})$",
+      "note_regex": "^GitHub\\b",
+      "on_repeat": "flag"
+    },
+    "email": {
+      "regex": "^([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})$",
+      "note_regex": "^(GitHub|email|mail)\\b",
+      "if_missing": "(пусто — доберём умной привязкой по login)"
+    },
+    "token": {
+      "regex": "^(sk-[A-Za-z0-9_-]{20,})\\b"
+    },
+    "balance": {
+      "regex": "^([\\d]+(?:[.,]\\d+)?)\\s*\\$$",
+      "cast": "float"
+    },
+    "aff": {
+      "regex": "^(https://\\S*sign-up\\?aff=\\w+)\\b"
+    }
+  },
+  "marks": [
+    {
+      "regex": "^([A-Za-z0-9._%+-]+(?:@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})?)$",
+      "note_regex": "^(bad email|bad)\\b",
+      "action": "Bad Rambler Email"
+    },
+    {
+      "regex": "^([A-Za-z0-9._%+-]+(?:@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})?)$",
+      "note_regex": "^suspended\\b",
+      "action": "Suspended Github"
+    }
+  ],
+  "ignore_bare_identifiers": true,
+  "noise": [
+    "^https://x-llm\\.net/(pricing|v1)",
+    "^My Key$",
+    "^\\d+\\s+моделей",
+    "^[A-Za-z0-9._-]+\\s+-\\s+[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
+  ]
+}

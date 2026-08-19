@@ -1,0 +1,129 @@
+:root {
+  --background: #121212;
+  --foreground: #cccccc;
+  --card-bg: #1e1e1e;
+  --card-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --accent: #00d4aa;
+  --accent-dim: #009e7e;
+  --border: #2a2a2a;
+  --text-muted: #888;
+  --table-hover: #252525;
+  --nav-bg: #181818;
+}
+
+html {
+  height: 100%;
+  color-scheme: dark;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  color: var(--foreground);
+  background: var(--background);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--accent-dim);
+}
+
+th,
+td {
+  padding: 10px 14px;
+  text-align: left;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+thead th {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+
+tbody tr:hover {
+  background: var(--table-hover);
+}
+
+button {
+  cursor: pointer;
+  border: 1px solid #444;
+  background: #2a2a2a;
+  color: var(--foreground);
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+button:hover {
+  background: #383838;
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+input, select {
+  background: #2a2a2a;
+  color: var(--foreground);
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: #333;
+}
+
+h2, h3 {
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+h3 {
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}

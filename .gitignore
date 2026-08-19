@@ -1,0 +1,29 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Секреты и локальная конфигурация
+.env
+.claude/settings.local.json
+
+# Учётные данные аккаунтов открытым текстом — в репозиторий не идут
+source/
+data/
+log/
+
+# Артефакты agent-browser
+--full-page
+--fullPage
+*.png
+
+# Node
+node_modules/
+.next/
+tsconfig.tsbuildinfo

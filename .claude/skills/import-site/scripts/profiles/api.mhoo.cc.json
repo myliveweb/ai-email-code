@@ -1,0 +1,25 @@
+{
+  "site": "api.mhoo.cc",
+  "separator": "^\\s*[=\\-]{5,}\\s*$",
+  "note_marker": "---",
+  "required": ["email", "token", "balance", "aff"],
+  "ignore_bare_identifiers": false,
+  "fields": {
+    "aff":      {"regex": "^(https://\\S*sign-up\\?aff=\\w+)\\b"},
+    "token":    {"regex": "^(sk-[A-Za-z0-9_-]{20,})\\b"},
+    "balance":  {"regex": "^([\\d]+(?:[.,]\\d+)?)\\s*¥", "cast": "float"},
+    "email":    {"regex": "^([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})$", "on_repeat": "flag"},
+    "password": {"regex": "^(?=[^a-z]*[a-z])(?=.*[A-Z])([A-Za-z0-9!#$%^&*_+=-]{8,})$",
+                 "on_repeat": "flag",
+                 "if_missing": "(пусто — в документе пароля нет)"}
+  },
+  "marks": [],
+  "noise": [
+    "^My Key$",
+    "^TODO$",
+    "^https://api\\.mhoo\\.cc/(pricing|v1|profile)\\b",
+    "^(gpt-image|seedream)[\\w.-]*$",
+    "^(from openai|client |completion |response |print\\(|model=|messages=|prompt=|size=|n=|base_url|api_key)",
+    "^[)\\]}{]"
+  ]
+}

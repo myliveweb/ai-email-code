@@ -1,0 +1,54 @@
+{
+  "site": "seekai.cc",
+  "separator": "^\\s*[=\\-]{5,}\\s*$",
+  "note_marker": "---",
+  "required": [
+    "token",
+    "balance",
+    "aff"
+  ],
+  "ignore_bare_identifiers": false,
+  "fields": {
+    "aff": {
+      "regex": "^(https://\\S*sign-up\\?aff=\\w+)\\b"
+    },
+    "token": {
+      "regex": "^(sk-[A-Za-z0-9_-]{20,})\\b"
+    },
+    "login_balance": {
+      "regex": "^([a-z][a-z0-9_]{4,})\\s*-\\s*(\\d+(?:[.,]\\d+)?)\\s*\\$",
+      "targets": {
+        "login": 1,
+        "balance": 2
+      },
+      "if_missing": "(пусто — в блоке только email)"
+    },
+    "balance": {
+      "regex": "^([\\d]+(?:[.,]\\d+)?)\\s*\\$"
+    },
+    "email": {
+      "regex": "^([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})(?![:\\w.-])",
+      "on_repeat": "keep",
+      "if_missing": "(пусто — в блоке только логин)"
+    },
+    "login": {
+      "regex": "^([a-z][a-z0-9_]{4,})$",
+      "on_repeat": "keep",
+      "if_missing": "(пусто — в блоке только email)"
+    },
+    "password": {
+      "regex": "^(?=.*[A-Z])([A-Za-z0-9!#$%^&*_+=]{8,})$",
+      "if_missing": "(пусто — в документе пароля нет)"
+    }
+  },
+  "marks": [],
+  "noise": [
+    "^My Key$",
+    "^GitHub$",
+    "^seekai\\.cc$",
+    "^https://seekai\\.cc(/v1)?$",
+    "^\\d{2}\\.\\d{2}\\.\\d{4}$",
+    "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}:",
+    "^(gpt|grok|qwen|glm|gemini|deepseek|DeepSeek|claude)[\\w.-]*$"
+  ]
+}
