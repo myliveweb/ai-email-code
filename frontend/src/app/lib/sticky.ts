@@ -1,5 +1,6 @@
 export const SITE_KEY = "selectedSiteId";
 export const AFF_KEY = "selectedAffAccountId";
+export const TAB_KEY = "browseTab";
 
 // выбор запоминается по id, но восстанавливается только если такая запись ещё
 // есть в списке: сайт или аккаунт могли удалить между визитами

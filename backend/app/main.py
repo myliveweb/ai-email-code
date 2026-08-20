@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from postgrest.exceptions import APIError
 
 from backend.app.config import settings
+from backend.app.credentials import make_password, make_username
 from backend.app.supabase_client import get_supabase
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -448,6 +449,7 @@ def browse_email_account(
     before_id: int | None = Query(default=None),
     from_id: int | None = Query(default=None),
     site_id: int | None = Query(default=None),
+    gmail: bool = Query(default=False),
 ) -> EmailBrowseResponse:
     try:
         sb = get_supabase()
@@ -464,6 +466,7 @@ def browse_email_account(
 
         def _build(q):
             q = q.eq("active", True)
+            q = q.ilike("email", "%@gmail.com") if gmail else q.not_.ilike("email", "%@gmail.com")
             if excluded_ids:
                 q = q.not_.in_("id", list(excluded_ids))
             return q
@@ -505,6 +508,11 @@ def set_email_error_status(req: EmailErrorStatusRequest):
         {"active": False, "reason": req.action}
     ).eq("email", req.email).execute()
     return {"status": "ok", "message": f"main_email: active=false, reason='{req.action}'"}
+
+
+@app.get("/api/generate-credentials")
+def generate_credentials(password_length: int = Query(default=10, ge=6, le=64)):
+    return {"login": make_username(), "password": make_password(password_length)}
 
 
 @app.get("/api/sites")
@@ -586,6 +594,7 @@ class SiteAccountRequest(BaseModel):
     token: str | None = None
     balance: float = 0
     aff: str | None = None
+    note: str | None = None
     smart_link: bool = False
 
 
@@ -627,6 +636,7 @@ def create_site_account(req: SiteAccountRequest):
             "token": req.token,
             "balance": req.balance,
             "aff": req.aff,
+            "note": req.note,
         }).execute()
     except APIError as e:
         if e.code == "23505":
@@ -650,6 +660,7 @@ class CustomAccountRequest(BaseModel):
     token: str | None = None
     balance: float = 0
     aff: str | None = None
+    note: str | None = None
     smart_link: bool = False
 
 
@@ -689,6 +700,7 @@ def create_custom_account(req: CustomAccountRequest):
             "token": req.token,
             "balance": req.balance,
             "aff": req.aff,
+            "note": req.note,
         }).execute()
     except APIError as e:
         if e.code == "23505":
@@ -705,7 +717,7 @@ def list_custom_accounts(site_id: int = Query(...)):
     sb = get_supabase()
     res = (
         sb.table("main_site_account_custom")
-        .select("id, login, email, password, token, balance, aff, email_id")
+        .select("id, login, email, password, token, balance, aff, note, email_id")
         .eq("site_id", site_id)
         .order("id")
         .execute()
@@ -718,7 +730,7 @@ def list_site_accounts(site_id: int = Query(...)):
     sb = get_supabase()
     res = (
         sb.table("main_site_account")
-        .select("id, login, email, token, balance, aff, github_id")
+        .select("id, login, email, token, balance, aff, note, github_id")
         .eq("site_id", site_id)
         .order("id")
         .execute()
@@ -732,6 +744,7 @@ class UpdateSiteAccountRequest(BaseModel):
     token: str | None = None
     balance: float = 0
     aff: str | None = None
+    note: str | None = None
 
 
 @app.put("/api/site-accounts/{account_id}")
@@ -743,6 +756,7 @@ def update_site_account(account_id: int, req: UpdateSiteAccountRequest):
         "token": req.token,
         "balance": req.balance,
         "aff": req.aff,
+        "note": req.note,
     }).eq("id", account_id).execute()
     return {"status": "ok"}
 
@@ -765,6 +779,7 @@ class UpdateCustomAccountRequest(BaseModel):
     token: str | None = None
     balance: float = 0
     aff: str | None = None
+    note: str | None = None
 
 
 @app.put("/api/site-accounts-custom/{account_id}")
@@ -777,6 +792,7 @@ def update_custom_account(account_id: int, req: UpdateCustomAccountRequest):
         "token": req.token,
         "balance": req.balance,
         "aff": req.aff,
+        "note": req.note,
     }).eq("id", account_id).execute()
     return {"status": "ok"}
 

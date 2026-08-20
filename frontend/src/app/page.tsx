@@ -17,6 +17,7 @@ type SiteAccount = {
   token: string | null;
   balance: number;
   aff: string | null;
+  note: string | null;
   kind: "github" | "custom";
 };
 
@@ -87,6 +88,7 @@ export default function Home() {
         token: row.token,
         balance: row.balance,
         aff: row.aff,
+        note: row.note,
       }),
     })
       .then(() => {
@@ -113,6 +115,7 @@ export default function Home() {
               <th>token</th>
               <th>balance</th>
               <th>aff</th>
+              <th>примечания</th>
               <th></th>
             </tr>
           </thead>
@@ -127,6 +130,7 @@ export default function Home() {
                     <td><input value={editRow.token || ""} onChange={(e) => setEditRow({ ...editRow, token: e.target.value })} /></td>
                     <td><input style={{ width: 70 }} value={editBalance} onChange={(e) => setEditBalance(e.target.value)} /></td>
                     <td><input value={editRow.aff || ""} onChange={(e) => setEditRow({ ...editRow, aff: e.target.value })} /></td>
+                    <td><input value={editRow.note || ""} onChange={(e) => setEditRow({ ...editRow, note: e.target.value })} /></td>
                     <td>
                       <button onClick={handleSave} title="Сохранить" style={{ border: "none", background: "none", color: "var(--accent)", fontSize: "1.1rem", padding: 4 }}>✓</button>
                     </td>
@@ -146,6 +150,7 @@ export default function Home() {
                     </td>
                     <td>{acc.balance}</td>
                     <td>{acc.aff ? <a href={acc.aff} target="_blank" rel="noopener noreferrer">↗</a> : "—"}</td>
+                    <td style={{ maxWidth: 260, whiteSpace: "pre-wrap" }}>{acc.note || "—"}</td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       <button onClick={() => handleEdit(acc)} title="Редактировать" style={{ border: "none", background: "none", color: "var(--text-muted)", fontSize: "1rem", padding: 4 }}>✏️</button>
                       <button onClick={() => handleDelete(acc)} title="Удалить" style={{ border: "none", background: "none", color: "var(--text-muted)", fontSize: "1rem", padding: 4, marginLeft: 2 }}>🗑️</button>

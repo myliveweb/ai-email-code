@@ -47,6 +47,8 @@ Backend на FastAPI обслуживает frontend и является еди�
 - `backend/app/config.py` — `Settings` на pydantic-settings (`supabase_url`, `supabase_key`,
   `api_host`, `api_port`, `frontend_origins`) + `allow_direct_localhost()`, см. раздел про proxy.
 - `backend/app/supabase_client.py` — `get_supabase()` под `@lru_cache`.
+- `backend/app/credentials.py` — `make_username()` / `make_password()`, генерация логина
+  и пароля для регистрации на сайте. Списки слов пришли от Босса (`data/fn.txt`).
 - `backend/app/main.py` (~790 строк) — всё приложение: CORS, все эндпоинты, извлечение кода.
 - `frontend/` — Next.js 16, App Router, TypeScript. `next.config.ts`: `rewrites`
   `/api/:path*` → backend (адрес через `BACKEND_URL`), `allowedDevOrigins`, `turbopack.root`.
@@ -75,9 +77,10 @@ GET    /api/github/accounts?limit=             список main_github
 GET    /api/github/accounts/browse             по одной записи; offset|from_id|after_id|before_id, site_id
 GET    /api/github/accounts/{id}               404 нет, 410 если active=false
 POST   /api/github/accounts/set-error-status   пометки брака
-GET    /api/email/accounts/browse              то же для main_email
+GET    /api/email/accounts/browse              то же для main_email; gmail=1 — только @gmail.com
 POST   /api/email/accounts/set-error-status    active=false + reason
 POST   /api/mail/check-mailbox                 достать код из письма
+GET    /api/generate-credentials               свежая пара login/password (password_length=10)
 GET    POST /api/sites                         список / создание сайта
 PATCH  DELETE /api/sites/{id}                  правка (exclude_unset) / удаление, 409 если есть аккаунты
 GET    /api/sites/{id}/stats                   счётчики и суммы балансов по обеим таблицам
@@ -90,6 +93,10 @@ PUT DELETE /api/site-accounts-custom/{id}
 `/api/github/accounts/browse` отдаёт только годные записи: `active=true`,
 `email ilike %@hotmail.com`, `error_status is null`. Если передан `site_id` — исключает id,
 уже привязанные к этому сайту.
+
+`/api/email/accounts/browse` по умолчанию отсекает gmail-ящики, с `gmail=1` наоборот отдаёт
+только их — на этом стоят вкладки «Почта» и «Gmail». Фильтр живёт во внутреннем `_build`,
+поэтому одинаково влияет и на `total`, и на все режимы навигации.
 
 `POST /api/site-accounts` с `smart_link: true` сам находит запись в `main_github` по `login`,
 затем по `email` (`_resolve_github_row`, 404 с текстом «Умная привязка: …»). Аналогично
@@ -128,10 +135,23 @@ PUT DELETE /api/site-accounts-custom/{id}
   удаление и правка по строке.
 - `src/app/sites/page.tsx` — список сайтов, статистика (`StatCell`), правила и `meta`
   (`MetaValue`), создание/правка/удаление.
-- `src/app/browse/page.tsx` — главный рабочий экран, ~740 строк. Табы `github` | `email`,
-  блоки «Запись ID», «Правила получения кода», «Уровень брака», «Аккаунт на сайте»,
-  компоненты `CopyBtn`, `Field`, `AccInput`, `CheckMailBtn`, `ErrorBtn`.
-- `lib/sticky.ts` — мелкий хелпер.
+- `src/app/browse/page.tsx` — главный рабочий экран, ~770 строк. Табы в порядке
+  «Почта» (`email`), «GitHub» (`github`), «Gmail» (`gmail`); `email` и `gmail` — одна и та же
+  форма над `main_email`, различаются только параметром `gmail=1` (флаг `isEmailTab` включает
+  общую логику, `gmailParam` уезжает в три fetch-а). Блоки «Запись ID», «Правила получения
+  кода», «Уровень брака», «Аккаунт на сайте», компоненты `CopyBtn`, `Field`, `AccInput`,
+  `CheckMailBtn`, `ErrorBtn`.
+  На почтовых вкладках верхняя строка блока с данными ящика — сгенерированные `login`
+  и `password` (`/api/generate-credentials`, кнопка `↻` рядом). Та же пара плюс email ящика
+  сразу подставляются в inputs «Аккаунта на сайте», чтобы Босс жал только «Сохранить».
+  Порядок полей там: `login`+`password`, `email`, `token`+`balance`, `aff`. На вкладке
+  `github` пароля нет — в `main_site_account` нет такой колонки.
+  Выбранная вкладка запоминается в localStorage (`TAB_KEY`); по умолчанию «Почта».
+  Восстановление сделано в колбэке fetch-а сайтов, а не в инициализаторе `useState` или теле
+  эффекта: первое даёт расхождение при гидратации, второе — ошибку
+  `react-hooks/set-state-in-effect`.
+- `lib/sticky.ts` — мелкий хелпер: ключи localStorage (`SITE_KEY`, `AFF_KEY`, `TAB_KEY`),
+  `pickStickyId`, `rememberId`.
 
 Удаление во фронтенде всегда через `confirm`, плюс защита на backend (409 при связанных данных).
 
@@ -150,10 +170,10 @@ Self-hosted Supabase в Docker (compose-проект `ai-work`), не облак
   active, restore_email, restore_pass, secret, created_at, reason`
 - `main_site` (7) — `id, name, cnt, created_at, meta jsonb, mail_subject, code_length,
   code_anchor, code_format`
-- `main_site_account` (~135) — `id, email, login, balance, token, aff, site_id, github_id,
+- `main_site_account` (~135) — `id, email, login, balance, token, aff, note, site_id, github_id,
   created_at`
 - `main_site_account_custom` (~70) — `id, site_id, email_id, email, login, password, token,
-  balance, aff, created_at`
+  balance, aff, note, created_at`
 
 Уникальные индексы, из которых и берутся 409: `main_site(name)`;
 `main_site_account(site_id, login) where login is not null`, `(site_id, email) where email is
@@ -162,7 +182,9 @@ null`, `(site_id, login) where login is not null`, `(site_id, email_id)`.
 
 `main_site.meta` — JSONB под разнородные данные уровня сайта: условия акций, требования
 к выводу, доступные модели, заметки. Заведён вместо отдельных колонок, потому что набор полей
-у сайтов не совпадает. Старая колонка `note` удалена.
+у сайтов не совпадает. Старая колонка `main_site.note` удалена — заметки уровня сайта живут
+в `meta`. У обеих таблиц аккаунтов при этом своя колонка `note text` («примечания» в UI,
+после `aff`) — это заметка по конкретному аккаунту, а не по сайту.
 
 DDL — только под `supabase_admin`, пароль берётся из окружения контейнера:
 

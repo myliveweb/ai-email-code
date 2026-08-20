@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { SITE_KEY, AFF_KEY, pickStickyId, rememberId } from "../lib/sticky";
+import { useCallback, useEffect, useState } from "react";
+import { SITE_KEY, AFF_KEY, TAB_KEY, pickStickyId, rememberId } from "../lib/sticky";
 
 // одна форма под обе вкладки: github-поля приходят с /api/github/accounts/browse,
-// password и secret — с /api/email/accounts/browse
+// password — с /api/email/accounts/browse
 type Account = {
   id: number;
   login?: string | null;
@@ -14,10 +14,9 @@ type Account = {
   password?: string | null;
   restore_email?: string | null;
   restore_pass?: string | null;
-  secret?: string | null;
 };
 
-type Tab = "github" | "email";
+type Tab = "github" | "email" | "gmail";
 
 type BrowseData = {
   account: Account;
@@ -245,7 +244,7 @@ function ErrorBtn({
 }
 
 export default function BrowsePage() {
-  const [tab, setTab] = useState<Tab>("github");
+  const [tab, setTab] = useState<Tab>("email");
   const [data, setData] = useState<BrowseData | null>(null);
   const [offset, setOffset] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -259,14 +258,20 @@ export default function BrowsePage() {
   const [newSiteName, setNewSiteName] = useState("");
   const [siteAccounts, setSiteAccounts] = useState<SiteAccountOption[]>([]);
   const [selectedAffId, setSelectedAffId] = useState<number>(0);
-  const [acc, setAcc] = useState({ login: "", email: "", token: "", balance: "", aff: "" });
+  const [acc, setAcc] = useState({ login: "", email: "", password: "", token: "", balance: "", aff: "" });
+  const [gen, setGen] = useState({ login: "", password: "" });
   const [smartLink, setSmartLink] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // вкладку восстанавливаем в колбэке уже идущего запроса сайтов: на сервере localStorage
+  // нет, а инициализатор useState дал бы расхождение при гидратации, setState прямо в теле
+  // эффекта — ошибку react-hooks/set-state-in-effect
   useEffect(() => {
     fetch("/api/sites")
       .then((res) => res.json())
       .then((d: Site[]) => {
+        const storedTab = localStorage.getItem(TAB_KEY);
+        if (storedTab === "email" || storedTab === "github" || storedTab === "gmail") setTab(storedTab);
         setSites(d);
         const site = d.find((s) => s.id === pickStickyId(d, SITE_KEY));
         if (site) { setSelectedSite(site.name); setSelectedSiteId(site.id); }
@@ -309,16 +314,21 @@ export default function BrowsePage() {
   };
 
   const browseBase = tab === "github" ? "/api/github/accounts/browse" : "/api/email/accounts/browse";
+  // вкладки «Почта» и «Gmail» — одна и та же форма над main_email, отличаются только
+  // доменом: gmail=1 отдаёт ровно gmail-ящики, без параметра они наоборот отсекаются
+  const gmailParam = tab === "gmail" ? "&gmail=1" : "";
+  const isEmailTab = tab === "email" || tab === "gmail";
 
   const switchTab = (next: Tab) => {
     if (next === tab) return;
     setTab(next);
+    localStorage.setItem(TAB_KEY, next);
     setData(null);
     setOffset(0);
     setCursorMode(false);
     setJumpError(null);
     setSaveError(null);
-    setAcc({ login: "", email: "", token: "", balance: "", aff: "" });
+    setAcc({ login: "", email: "", password: "", token: "", balance: "", aff: "" });
   };
 
   const handleSaveAccount = () => {
@@ -328,7 +338,9 @@ export default function BrowsePage() {
     const url = isGithub ? "/api/site-accounts" : "/api/site-accounts-custom";
     const body = {
       site_id: selectedSiteId,
-      ...(isGithub ? { github_id: data.account.id, smart_link: smartLink } : { email_id: data.account.id }),
+      ...(isGithub
+        ? { github_id: data.account.id, smart_link: smartLink }
+        : { email_id: data.account.id, password: acc.password || null }),
       login: acc.login || null,
       email: acc.email || null,
       token: acc.token || null,
@@ -348,7 +360,7 @@ export default function BrowsePage() {
         return res.json();
       })
       .then(() => {
-        setAcc({ login: "", email: "", token: "", balance: "", aff: "" });
+        setAcc({ login: "", email: "", password: "", token: "", balance: "", aff: "" });
         // шаг по id, а не по offset: сохранённый аккаунт выпал из выборки по сайту,
         // и offset+1 перескочил бы через следующий
         stepByCursor("after");
@@ -359,7 +371,7 @@ export default function BrowsePage() {
   useEffect(() => {
     const controller = new AbortController();
     const siteParam = selectedSiteId ? `&site_id=${selectedSiteId}` : "";
-    fetch(`${browseBase}?offset=${offset}${siteParam}`, { signal: controller.signal })
+    fetch(`${browseBase}?offset=${offset}${siteParam}${gmailParam}`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`Backend: ${res.status}`);
         return res.json();
@@ -374,13 +386,33 @@ export default function BrowsePage() {
         if (e.name !== "AbortError") setError(e.message);
       });
     return () => controller.abort();
-  }, [offset, selectedSiteId, browseBase]);
+  }, [offset, selectedSiteId, browseBase, gmailParam]);
+
+  const generateCreds = useCallback((email?: string) => {
+    fetch("/api/generate-credentials")
+      .then((res) => res.json())
+      .then((d: { login: string; password: string }) => {
+        setGen(d);
+        setAcc((a) => ({ ...a, login: d.login, password: d.password, ...(email !== undefined ? { email } : {}) }));
+      })
+      .catch(() => {});
+  }, []);
+
+  const browsedId = data?.account.id;
+  const browsedEmail = data?.account.email ?? "";
+
+  // на почтовых вкладках аккаунт на сайте регистрируется под свежей парой, а email
+  // берётся у самого ящика — заполняем всё сразу, чтобы Босс только жал «Сохранить»
+  useEffect(() => {
+    if (!isEmailTab || !browsedId) return;
+    generateCreds(browsedEmail);
+  }, [isEmailTab, browsedId, browsedEmail, generateCreds]);
 
   const handleJump = () => {
     const id = parseInt(jumpId, 10);
     if (!id || id < 1) return;
     setJumpError(null);
-    fetch(`${browseBase}?from_id=${id}&site_id=${selectedSiteId}`)
+    fetch(`${browseBase}?from_id=${id}&site_id=${selectedSiteId}${gmailParam}`)
       .then((res) => {
         if (res.status === 404) throw new Error("Записей больше нет");
         if (!res.ok) throw new Error(`Backend: ${res.status}`);
@@ -403,7 +435,7 @@ export default function BrowsePage() {
   const stepByCursor = (dir: "after" | "before") => {
     if (!data) return;
     const param = dir === "after" ? `after_id=${data.account.id}` : `before_id=${data.account.id}`;
-    fetch(`${browseBase}?${param}&site_id=${selectedSiteId}`)
+    fetch(`${browseBase}?${param}&site_id=${selectedSiteId}${gmailParam}`)
       .then((res) => {
         if (!res.ok) throw new Error(`Backend: ${res.status}`);
         return res.json();
@@ -436,7 +468,7 @@ export default function BrowsePage() {
 
   const tabBar = (
     <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
-      {([["github", "GitHub"], ["email", "Почта"]] as [Tab, string][]).map(([key, label]) => (
+      {([["email", "Почта"], ["github", "GitHub"], ["gmail", "Gmail"]] as [Tab, string][]).map(([key, label]) => (
         <button
           key={key}
           onClick={() => switchTab(key)}
@@ -555,10 +587,10 @@ export default function BrowsePage() {
       </div>
       {jumpError && <p style={{ color: "#ff6b6b", margin: "4px 0", transition: "opacity 1s", opacity: jumpFading ? 0 : 1 }}>{jumpError}</p>}
       <p style={{ color: "var(--text-muted)", marginBottom: "1rem", fontSize: "0.85rem" }}>
-        {offset + 1} из {total} ({tab === "github" ? "active, @hotmail.com" : "active"})
+        {offset + 1} из {total} ({tab === "github" ? "active, @hotmail.com" : tab === "gmail" ? "active, только @gmail.com" : "active, без @gmail.com"})
       </p>
 
-      {tab === "email" && (
+      {isEmailTab && (
         <div style={{ marginBottom: "1rem" }}>
           <h3 style={{ margin: "0 0 6px" }}>Правила получения кода</h3>
           <div style={{ display: "flex", gap: 24, fontSize: "0.85rem" }}>
@@ -606,6 +638,19 @@ export default function BrowsePage() {
       <table style={{ width: "auto" }}>
         <tbody>
           <tr>
+            <Field label="login" value={gen.login} />
+            <Field label="password" value={gen.password} />
+            <td style={{ padding: "6px 16px 6px 0", verticalAlign: "bottom" }}>
+              <button
+                onClick={() => generateCreds()}
+                title="Сгенерировать заново"
+                style={{ border: "none", background: "none", color: "var(--accent)", fontSize: "1.1rem", padding: 4, cursor: "pointer" }}
+              >
+                ↻
+              </button>
+            </td>
+          </tr>
+          <tr>
             <Field label="email" value={account.email} onCopy={(v) => setAcc((a) => ({ ...a, email: v }))} />
             <Field label="password" value={account.password} />
             <CheckMailBtn
@@ -632,9 +677,6 @@ export default function BrowsePage() {
               codeFormat={siteRules?.code_format}
               disabled={!siteRules?.mail_subject}
             />
-          </tr>
-          <tr>
-            <Field label="secret" value={account.secret} />
           </tr>
         </tbody>
       </table>
@@ -699,13 +741,32 @@ export default function BrowsePage() {
             onChange={(v) => setAcc((a) => ({ ...a, login: v }))}
             flex={1}
           />
-          <AccInput
-            placeholder="email_site"
-            value={acc.email}
-            onChange={(v) => setAcc((a) => ({ ...a, email: v }))}
-            flex={1}
-          />
+          {isEmailTab ? (
+            <AccInput
+              placeholder="password_site"
+              value={acc.password}
+              onChange={(v) => setAcc((a) => ({ ...a, password: v }))}
+              flex={1}
+            />
+          ) : (
+            <AccInput
+              placeholder="email_site"
+              value={acc.email}
+              onChange={(v) => setAcc((a) => ({ ...a, email: v }))}
+              flex={1}
+            />
+          )}
         </div>
+        {isEmailTab && (
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <AccInput
+              placeholder="email_site"
+              value={acc.email}
+              onChange={(v) => setAcc((a) => ({ ...a, email: v }))}
+              flex={1}
+            />
+          </div>
+        )}
         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
           <AccInput
             placeholder="token"
