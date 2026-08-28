@@ -1,10 +1,13 @@
+import asyncio
 import json
 import re
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel
 from postgrest.exceptions import APIError
@@ -17,7 +20,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from outlook_mail_checker import get_mail_by_subject as outlook_get_mail
 from rambler_imap_mail_checker import get_mail_by_subject as rambler_get_mail
 
-app = FastAPI(title="AI Email Code API", version="0.1.0")
+# Бесконечный поток SSE не даёт uvicorn завершиться: он ждёт закрытия соединений,
+# и при `--reload` старый процесс держит порт, пока открыта хоть одна страница, —
+# backend висел до ручного перезапуска. Флаг закрывает потоки на shutdown, а
+# EventSource во фронте переподключается сам.
+_shutdown = asyncio.Event()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    _shutdown.set()
+
+
+app = FastAPI(title="AI Email Code API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,6 +81,270 @@ def health() -> HealthResponse:
         return HealthResponse(status="ok", supabase="error")
 
     return HealthResponse(status="ok", supabase="ok")
+
+
+@app.get("/api/ping")
+def ping() -> dict[str, bool]:
+    """Живость самого процесса, без базы — ручка для сторожа `scripts/health_watch.sh`.
+
+    От `/api/health` отличается тем, что не ходит в Supabase: лежащая база
+    перезапуском backend не лечится, а её медленный ответ выглядел бы как
+    смерть процесса и сторож снимал бы живой сервис.
+    """
+    return {"alive": True}
+
+
+CLAUDE_KEY_FILE = Path.home() / ".claude" / "gorouter_key"
+CLAUDE_STATIONS_FILE = Path(__file__).resolve().parents[2] / "log" / "claude_stations.json"
+ACCOUNT_TABLES = ("main_site_account", "main_site_account_custom")
+
+# Открытые страницы, ждущие вестей от крон-скриптов. Скрипт стучит в
+# /api/events/notify, страница перезапрашивает только свои данные — иначе
+# отчёт висит устаревшим до перехода по вкладкам.
+_event_queues: set[asyncio.Queue[str]] = set()
+# поток без трафика рвут и прокси, и dev-сервер, поэтому пустой комментарий раз в 25 с
+EVENT_KEEPALIVE = 25.0
+
+
+class NotifyRequest(BaseModel):
+    topic: str
+
+
+@app.post("/api/events/notify")
+async def events_notify(payload: NotifyRequest) -> dict:
+    """Разослать открытым страницам весть «данные по теме обновились»."""
+    for queue in list(_event_queues):
+        queue.put_nowait(payload.topic)
+    logger.info(f"Событие {payload.topic}: слушателей {len(_event_queues)}")
+    return {"topic": payload.topic, "listeners": len(_event_queues)}
+
+
+@app.get("/api/events")
+async def events() -> StreamingResponse:
+    """Поток событий (SSE) для открытых страниц."""
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    _event_queues.add(queue)
+
+    async def stream():
+        stopping = asyncio.ensure_future(_shutdown.wait())
+        try:
+            while not _shutdown.is_set():
+                nxt = asyncio.ensure_future(queue.get())
+                done, _ = await asyncio.wait(
+                    {nxt, stopping},
+                    timeout=EVENT_KEEPALIVE,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if nxt not in done:
+                    nxt.cancel()
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"event: update\ndata: {nxt.result()}\n\n"
+        finally:
+            stopping.cancel()
+            _event_queues.discard(queue)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+class ActivateRequest(BaseModel):
+    site_id: int
+
+
+@app.get("/api/claude/stations")
+def claude_stations() -> dict:
+    """Снимок станций от крон-скрипта: отдаём как есть, ничего не считая.
+
+    Годность (`can_activate`) проставляет сам скрипт: живая проба стоит до 25 секунд
+    на станцию, и решение принимает тот, кто щупал. Снимок обновляется каждые
+    15 минут, страница только рисует значок по готовой метке.
+    """
+    if not CLAUDE_STATIONS_FILE.exists():
+        return {"taken_at": None, "stations": {}}
+    try:
+        return json.loads(CLAUDE_STATIONS_FILE.read_text())
+    except ValueError as exc:
+        logger.error(f"Снимок станций нечитаем: {exc}")
+        raise HTTPException(status_code=502, detail="Снимок станций повреждён") from exc
+
+
+@app.post("/api/claude/activate")
+def claude_activate(payload: ActivateRequest) -> dict:
+    """Переключить Claude Code на станцию: ключ и ANTHROPIC_BASE_URL вместе.
+
+    Ключ читается при старте сессии, поэтому подхватит его следующая, а не текущая.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    import scripts.gorouter_balance as gb
+
+    station = next((s for s in gb.load_stations() if s["id"] == payload.site_id), None)
+    if station is None:
+        raise HTTPException(status_code=404, detail="У сайта не заполнен meta.endpoints_anthropic")
+
+    cands = [
+        {"row": acc, "station": station, "balance": float(acc.get("balance") or 0),
+         "fresh": False, "source": "db", "suspect": False}
+        for acc in station["accounts"]
+    ]
+    if not cands:
+        raise HTTPException(status_code=409, detail="На станции нет аккаунтов с ключом")
+
+    ranked = gb.rank(cands)
+    main_model = gb.station_models(station)["main"]
+    target = None
+    available: list[str] = []
+    for cand in ranked[: gb.MAX_PROBES]:
+        res = gb.probe(station["endpoint"], cand["row"]["token"])
+        if res["alive"] and main_model in res["models"]:
+            target = cand
+            available = res["models"]
+            break
+    if target is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Ни один ключ станции не отвечает с моделью {main_model}",
+        )
+
+    gb.write_atomic(gb.KEY_FILE, target["row"]["token"] + "\n", 0o600)
+    log = gb.update_settings(station, target, available)
+    logger.info(f"Claude Code переключён на {station['name']}: {'; '.join(log)}")
+    return {
+        "station": station["name"],
+        "login": target["row"]["login"],
+        "balance": target["balance"],
+        "log": log,
+    }
+
+
+
+@app.get("/api/claude/active")
+def claude_active() -> dict:
+    """Станция и аккаунт, на которых сидит Claude Code: ключ из файла ищем в базе."""
+    try:
+        token = CLAUDE_KEY_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return {"station": None, "login": None, "known": False}
+    if not token:
+        return {"station": None, "login": None, "known": False}
+
+    sb = get_supabase()
+    for table in ACCOUNT_TABLES:
+        try:
+            res = (
+                sb.table(table)
+                .select("id, login, email, site_id, balance, day_work")
+                .eq("token", token)
+                .limit(1)
+                .execute()
+            )
+        except Exception as exc:
+            logger.error(f"Не удалось найти активный ключ в {table}: {exc}")
+            raise HTTPException(status_code=502, detail="База данных недоступна") from exc
+        rows = res.data or []
+        if not rows:
+            continue
+        row = rows[0]
+        site = (
+            sb.table("main_site").select("name").eq("id", row["site_id"]).limit(1).execute()
+        ).data or []
+        return {
+            "station": site[0]["name"] if site else None,
+            "login": row.get("login") or row.get("email"),
+            "account_id": row["id"],
+            "table": table,
+            "balance": row.get("balance"),
+            # Запас по времени при нашем среднем темпе: его считает крон-скрипт
+            # балансов, здесь только отдаётся — им живёт и статусная строка.
+            "day_work": row.get("day_work"),
+            "known": True,
+        }
+    # ключа нет ни в одной таблице — Босс переключил Claude Code руками
+    return {"station": None, "login": None, "known": False}
+
+
+LINUXDO_GROUP_ORDER = {"live": 0, "other": 1, "plain": 2, "dead": 3}
+
+
+@app.get("/api/linuxdo/report")
+def linuxdo_report() -> dict:
+    """Последний отчёт разведки linux.do из `linux_do_*`. Собирает крон, backend читает.
+
+    Форма ответа осталась файловой: вкладке нужен плоский список карточек, а в базе тема
+    и раздача лежат раздельно — тема с двумя раздачами даёт две карточки. Отсеянные темы
+    (`rejected`) на вкладку не идут, их держат ради правки словарей отбора.
+    """
+    sb = get_supabase()
+    try:
+        runs = (
+            sb.table("linux_do_run").select("*")
+            .order("started_at", desc=True).limit(1).execute().data
+        )
+        topics = (
+            sb.table("linux_do_topic")
+            # Поимённо, а не `*`: оригинал поста в `body` весит до 8 КБ на тему, а вкладке
+            # он не нужен — она показывает перевод.
+            .select("topic_id, title, url, born, kind, hot, station, site_id, marks, "
+                    "ru_useful, ru_literal, ru_body")
+            .is_("rejected", "null").execute().data
+        )
+        cdks = (
+            sb.table("linux_do_cdk").select("*")
+            .not_.is_("topic_id", "null").order("checked_at").execute().data
+        )
+    except Exception as exc:
+        logger.error(f"Не удалось прочитать разведку linux.do: {exc}")
+        raise HTTPException(status_code=502, detail="База данных недоступна") from exc
+    if not runs:
+        raise HTTPException(status_code=404, detail="Отчёт ещё не собран")
+    run = runs[0]
+
+    by_topic: dict[int, list[dict]] = {}
+    for row in cdks or []:
+        by_topic.setdefault(row["topic_id"], []).append(row)
+
+    items = []
+    for t in topics or []:
+        card = {
+            "topic_id": t["topic_id"],
+            "title": t["title"],
+            "useful": t["ru_useful"] or "",
+            "literal": t["ru_literal"] or "",
+            "url": t["url"],
+            "born": t["born"],
+            "station": t["station"] or "",
+            "known": t["site_id"] is not None,
+            "marks": t["marks"] or [],
+            # Только перевод: оригинал поста Боссу не нужен, а иероглифы утроили бы ответ.
+            "body": t["ru_body"] or "",
+            "hot": t["hot"],
+        }
+        got = by_topic.get(t["topic_id"])
+        if not got:
+            items.append(card | {"group": t["kind"], "state": [], "cdk": ""})
+            continue
+        for row in got:
+            items.append(card | {
+                "group": "live" if row["verdict"] == "live" else "dead",
+                "state": row["state"] or [],
+                "cdk": row["url"],
+            })
+
+    items.sort(key=lambda c: c["born"], reverse=True)
+    items.sort(key=lambda c: LINUXDO_GROUP_ORDER.get(c["group"], 9))
+    return {
+        "stamp": run["started_at"],
+        "account": run["account"],
+        "trust_level": run["trust_level"],
+        "seen_total": run["seen_total"],
+        "picked": run["picked"],
+        "with_links": run["with_links"],
+        "closed": run["closed_known"],
+        "items": items,
+    }
 
 
 @app.get("/api/github/accounts", response_model=list[GithubAccount])
@@ -518,7 +798,7 @@ def generate_credentials(password_length: int = Query(default=10, ge=6, le=64)):
 @app.get("/api/sites")
 def list_sites():
     sb = get_supabase()
-    res = sb.table("main_site").select("id, name, meta, mail_subject, code_anchor, code_length, code_format").order("name").execute()
+    res = sb.table("main_site").select("id, name, cnt, meta, mail_subject, code_anchor, code_length, code_format").order("name").execute()
     return res.data
 
 
@@ -594,6 +874,8 @@ class SiteAccountRequest(BaseModel):
     token: str | None = None
     balance: float = 0
     aff: str | None = None
+    access_token: str | None = None
+    panel_id: int | None = None
     note: str | None = None
     smart_link: bool = False
 
@@ -618,6 +900,19 @@ def _resolve_github_row(sb, login: str | None, email: str | None) -> dict:
     )
 
 
+def _recount_site(sb, site_id: int) -> None:
+    """Пересчитать `main_site.cnt` по обеим таблицам аккаунтов.
+
+    Прибавлять и убавлять единицу ненадёжно: записи заводятся ещё и сырым SQL,
+    и такая вставка счётчик не двигает — расхождение накапливалось молча.
+    """
+    total = 0
+    for table in ("main_site_account", "main_site_account_custom"):
+        res = sb.table(table).select("id", count="exact").eq("site_id", site_id).execute()
+        total += res.count or 0
+    sb.table("main_site").update({"cnt": total}).eq("id", site_id).execute()
+
+
 @app.post("/api/site-accounts")
 def create_site_account(req: SiteAccountRequest):
     sb = get_supabase()
@@ -636,6 +931,8 @@ def create_site_account(req: SiteAccountRequest):
             "token": req.token,
             "balance": req.balance,
             "aff": req.aff,
+            "access_token": req.access_token,
+            "panel_id": req.panel_id,
             "note": req.note,
         }).execute()
     except APIError as e:
@@ -645,9 +942,7 @@ def create_site_account(req: SiteAccountRequest):
                 detail=f"На этом сайте уже есть аккаунт с login={login} или email={email}",
             ) from e
         raise
-    sb.table("main_site").update(
-        {"cnt": sb.table("main_site").select("cnt").eq("id", req.site_id).execute().data[0]["cnt"] + 1}
-    ).eq("id", req.site_id).execute()
+    _recount_site(sb, req.site_id)
     return res.data[0]
 
 
@@ -660,6 +955,8 @@ class CustomAccountRequest(BaseModel):
     token: str | None = None
     balance: float = 0
     aff: str | None = None
+    access_token: str | None = None
+    panel_id: int | None = None
     note: str | None = None
     smart_link: bool = False
 
@@ -700,6 +997,8 @@ def create_custom_account(req: CustomAccountRequest):
             "token": req.token,
             "balance": req.balance,
             "aff": req.aff,
+            "access_token": req.access_token,
+            "panel_id": req.panel_id,
             "note": req.note,
         }).execute()
     except APIError as e:
@@ -709,6 +1008,7 @@ def create_custom_account(req: CustomAccountRequest):
                 detail=f"На этом сайте уже есть аккаунт с email={email} или login={req.login}",
             ) from e
         raise
+    _recount_site(sb, req.site_id)
     return res.data[0]
 
 
@@ -717,7 +1017,10 @@ def list_custom_accounts(site_id: int = Query(...)):
     sb = get_supabase()
     res = (
         sb.table("main_site_account_custom")
-        .select("id, login, email, password, token, balance, aff, note, email_id")
+        .select(
+            "id, login, email, password, token, balance, opus_5_req, day_work, aff, "
+            "access_token, panel_id, note, email_id"
+        )
         .eq("site_id", site_id)
         .order("id")
         .execute()
@@ -730,12 +1033,21 @@ def list_site_accounts(site_id: int = Query(...)):
     sb = get_supabase()
     res = (
         sb.table("main_site_account")
-        .select("id, login, email, token, balance, aff, note, github_id")
+        .select(
+            "id, login, email, token, balance, opus_5_req, day_work, aff, "
+            "access_token, panel_id, note, github_id, main_github(pass_github)"
+        )
         .eq("site_id", site_id)
         .order("id")
         .execute()
     )
-    return res.data
+    rows = res.data or []
+    # Пароль GitHub живёт в main_github; в таблице он нужен рядом с логином —
+    # им же входят на станцию через OAuth. Разворачиваем вложение в плоское поле.
+    for row in rows:
+        linked = row.pop("main_github", None) or {}
+        row["pass_github"] = linked.get("pass_github")
+    return rows
 
 
 class UpdateSiteAccountRequest(BaseModel):
@@ -744,6 +1056,8 @@ class UpdateSiteAccountRequest(BaseModel):
     token: str | None = None
     balance: float = 0
     aff: str | None = None
+    access_token: str | None = None
+    panel_id: int | None = None
     note: str | None = None
 
 
@@ -756,6 +1070,8 @@ def update_site_account(account_id: int, req: UpdateSiteAccountRequest):
         "token": req.token,
         "balance": req.balance,
         "aff": req.aff,
+        "access_token": req.access_token,
+        "panel_id": req.panel_id,
         "note": req.note,
     }).eq("id", account_id).execute()
     return {"status": "ok"}
@@ -765,10 +1081,7 @@ def update_site_account(account_id: int, req: UpdateSiteAccountRequest):
 def delete_site_account(account_id: int, site_id: int = Query(...)):
     sb = get_supabase()
     sb.table("main_site_account").delete().eq("id", account_id).execute()
-    cnt_res = sb.table("main_site").select("cnt").eq("id", site_id).execute()
-    if cnt_res.data:
-        new_cnt = max(0, cnt_res.data[0]["cnt"] - 1)
-        sb.table("main_site").update({"cnt": new_cnt}).eq("id", site_id).execute()
+    _recount_site(sb, site_id)
     return {"status": "ok"}
 
 
@@ -779,6 +1092,8 @@ class UpdateCustomAccountRequest(BaseModel):
     token: str | None = None
     balance: float = 0
     aff: str | None = None
+    access_token: str | None = None
+    panel_id: int | None = None
     note: str | None = None
 
 
@@ -792,6 +1107,8 @@ def update_custom_account(account_id: int, req: UpdateCustomAccountRequest):
         "token": req.token,
         "balance": req.balance,
         "aff": req.aff,
+        "access_token": req.access_token,
+        "panel_id": req.panel_id,
         "note": req.note,
     }).eq("id", account_id).execute()
     return {"status": "ok"}
@@ -800,5 +1117,10 @@ def update_custom_account(account_id: int, req: UpdateCustomAccountRequest):
 @app.delete("/api/site-accounts-custom/{account_id}")
 def delete_custom_account(account_id: int):
     sb = get_supabase()
+    # site_id живёт в самой записи, поэтому его надо взять до удаления.
+    row = sb.table("main_site_account_custom").select("site_id").eq("id", account_id).execute()
+    site_id = row.data[0]["site_id"] if row.data else None
     sb.table("main_site_account_custom").delete().eq("id", account_id).execute()
+    if site_id:
+        _recount_site(sb, site_id)
     return {"status": "ok"}

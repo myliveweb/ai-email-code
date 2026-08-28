@@ -18,14 +18,7 @@ export default function CopyBtn({ value }: { value: string | null }) {
     <button
       onClick={handleCopy}
       title="Скопировать"
-      style={{
-        marginLeft: 8,
-        cursor: "pointer",
-        background: "none",
-        border: "none",
-        fontSize: "1rem",
-        color: copied ? "green" : "var(--foreground)",
-      }}
+      className={copied ? "cm-copy-btn cm-copy-btn-copied" : "cm-copy-btn"}
     >
       {copied ? "\u2713" : "\u2398"}
     </button>

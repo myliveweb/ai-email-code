@@ -39,12 +39,18 @@ def compile_profile(p: dict) -> dict:
             if target not in names:
                 names.append(target)
             missing.setdefault(target, spec.get("if_missing", "??? не найден"))
+        if spec.get("note_to"):
+            target = spec["note_to"]
+            if target not in names:
+                names.append(target)
+            missing.setdefault(target, spec.get("note_if_missing", "-"))
     p["_names"] = names
     p["_missing"] = missing
     for spec in p.get("marks", []):
         spec["_re"] = re.compile(spec["regex"])
         spec["_note_re"] = re.compile(spec["note_regex"], re.I)
     p["_noise"] = [re.compile(x) for x in p.get("noise", [])]
+    p["_note_clean"] = [re.compile(x, re.I) for x in p.get("note_clean", [])]
     p["_bare"] = re.compile(r"^[A-Za-z0-9._%+-]+(?:@[A-Za-z0-9.-]+\.[A-Za-z]{2,})?$")
     return p
 
@@ -59,6 +65,8 @@ def cast(value: str, kind: str | None):
         return float(value.replace(",", "."))
     if kind == "int":
         return int(value)
+    if kind == "lower":
+        return value.strip().lower()
     return value
 
 
@@ -93,6 +101,13 @@ def parse_block(lines: list[str], p: dict) -> dict:
             for target, value in spec.get("const", {}).items():
                 if rec[target] is None:
                     rec[target] = value
+            if spec.get("note_to") and note:
+                text = note
+                for rx in p["_note_clean"]:
+                    text = rx.sub("", text).strip()
+                if text:
+                    prev = rec[spec["note_to"]]
+                    rec[spec["note_to"]] = f"{prev}; {text}" if prev else text
             break
         if matched:
             continue
@@ -153,12 +168,23 @@ def main() -> None:
     clean: list[str] = []
     ask: list[str] = []
     marks: dict[tuple[str, str], dict] = {}
+    dedupe_by = profile.get("dedupe_by", [])
+    seen: dict[tuple, int] = {}
 
     for num, (s, e, body) in enumerate(blocks, 1):
         rec = parse_block(body, profile)
         all_none = all(rec[f] is None for f in profile["_names"])
         if all_none and not rec["_unknown"] and not rec["_errors"]:
             continue
+        for ov in profile.get("overrides", []):
+            if all(str(rec.get(k)) == str(v) for k, v in ov["match"].items()):
+                rec.update(ov["set"])
+        if dedupe_by:
+            key = tuple(str(rec.get(f)) for f in dedupe_by)
+            if key in seen:
+                print(f"блок {num} (строки {s}-{e}) — дубль блока {seen[key]}, отброшен")
+                continue
+            seen[key] = num
         rendered = render(rec, profile, num, s, e)
         if rec["_unknown"] or any(rec[f] is None for f in required):
             ask.append(rendered)

@@ -64,7 +64,14 @@ start_services() {
     fi
   done
 
-  uv run uvicorn backend.app.main:app --host 127.0.0.1 --port "$BACKEND_PORT" --reload &
+  # Слежение сужено до backend: без этого перезапуск ловила любая правка скрипта
+  # в scripts/, хотя приложения она не касается.
+  # `--timeout-graceful-shutdown` обязателен: без предела uvicorn при перезапуске от
+  # --reload ждёт завершения активных запросов бесконечно, а поток SSE (`/api/events`)
+  # у открытой страницы не кончается никогда. Слушающий сокет при этом уже закрыт для
+  # приёма — снаружи backend выглядит живым (порт слушается), но не отвечает вовсе.
+  uv run uvicorn backend.app.main:app --host 127.0.0.1 --port "$BACKEND_PORT" \
+    --reload --reload-dir backend --timeout-graceful-shutdown 5 &
   local backend_pid=$!
 
   (cd frontend && npm run dev) &

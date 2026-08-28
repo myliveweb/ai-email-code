@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import SiteSelect from "../components/SiteSelect";
 import { SITE_KEY, AFF_KEY, TAB_KEY, pickStickyId, rememberId } from "../lib/sticky";
 
 // одна форма под обе вкладки: github-поля приходят с /api/github/accounts/browse,
@@ -27,6 +28,7 @@ type BrowseData = {
 type Site = {
   id: number;
   name: string;
+  cnt: number | null;
   mail_subject: string | null;
   code_anchor: string | null;
   code_length: number | null;
@@ -57,14 +59,7 @@ function CopyBtn({ value, onCopy }: { value?: string | null; onCopy?: (value: st
     <button
       onClick={handleCopy}
       title="Скопировать"
-      style={{
-        marginLeft: 8,
-        cursor: "pointer",
-        background: "none",
-        border: "none",
-        fontSize: "1rem",
-        color: copied ? "green" : "var(--foreground)",
-      }}
+      className={`br-copy-btn${copied ? " br-copy-btn-copied" : ""}`}
     >
       {copied ? "\u2713" : "\u2398"}
     </button>
@@ -73,10 +68,10 @@ function CopyBtn({ value, onCopy }: { value?: string | null; onCopy?: (value: st
 
 function Field({ label, value, onCopy }: { label: string; value?: string | null; onCopy?: (value: string) => void }) {
   return (
-    <td style={{ padding: "6px 16px 6px 0" }}>
-      <span style={{ opacity: 0.6, fontSize: "0.85rem" }}>{label}</span>
+    <td className="br-field">
+      <span className="br-field-label">{label}</span>
       <br />
-      <span>{value ?? "—"}</span>
+      <span className="br-field-value">{value ?? "—"}</span>
       <CopyBtn value={value} onCopy={onCopy} />
     </td>
   );
@@ -94,30 +89,18 @@ function AccInput({
   flex: number;
 }) {
   return (
-    <div style={{ position: "relative", display: "flex", flex }}>
+    <div className="br-acc-input" style={{ flex }}>
       <input
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        style={{ flex: 1, paddingRight: 26 }}
+        className="br-acc-input-field"
       />
       {value && (
         <button
           onClick={() => onChange("")}
           title="Очистить"
-          style={{
-            position: "absolute",
-            right: 6,
-            top: "50%",
-            transform: "translateY(-50%)",
-            background: "none",
-            border: "none",
-            padding: 0,
-            lineHeight: 1,
-            fontSize: "0.9rem",
-            cursor: "pointer",
-            color: "var(--text-muted)",
-          }}
+          className="br-acc-clear"
         >
           {"\u2715"}
         </button>
@@ -175,18 +158,18 @@ function CheckMailBtn({
   };
 
   return (
-    <td style={{ padding: "6px 16px 6px 0", verticalAlign: "bottom" }}>
+    <td className="br-check-cell">
       <button
         onClick={handleCheck}
         disabled={disabled || status === "loading"}
         data-email={email}
         title={disabled ? "У сайта не задана тема письма" : undefined}
-        style={{ cursor: "pointer", fontSize: "0.85rem", minWidth: 150, whiteSpace: "nowrap" }}
+        className="br-check-btn"
       >
         {status === "loading" ? "..." : "Проверить ящик"}
       </button>
       {status !== "idle" && status !== "loading" && (
-        <div style={{ fontSize: "0.75rem", marginTop: 4, color: status === "ok" ? "green" : "crimson" }}>
+        <div className={`br-check-msg ${status === "ok" ? "br-check-msg-ok" : "br-check-msg-error"}`}>
           {msg}
           {code && <CopyBtn value={code} />}
         </div>
@@ -227,16 +210,13 @@ function ErrorBtn({
       .catch(() => setStatus("error"));
   };
 
+  const stateClass = status === "done" ? " br-error-link-done" : status === "error" ? " br-error-link-error" : "";
+
   return (
     <a
       href="#"
       onClick={handleClick}
-      style={{
-        color: status === "done" ? "green" : status === "error" ? "crimson" : "var(--foreground)",
-        textDecoration: "underline",
-        cursor: value ? "pointer" : "not-allowed",
-        opacity: value ? 1 : 0.4,
-      }}
+      className={`br-error-link${stateClass}${value ? "" : " br-error-link-off"}`}
     >
       {status === "loading" ? "..." : status === "done" ? `✓ ${action}` : status === "error" ? `✕ ${action}` : action}
     </a>
@@ -258,7 +238,7 @@ export default function BrowsePage() {
   const [newSiteName, setNewSiteName] = useState("");
   const [siteAccounts, setSiteAccounts] = useState<SiteAccountOption[]>([]);
   const [selectedAffId, setSelectedAffId] = useState<number>(0);
-  const [acc, setAcc] = useState({ login: "", email: "", password: "", token: "", balance: "", aff: "" });
+  const [acc, setAcc] = useState({ login: "", email: "", password: "", token: "", balance: "", aff: "", accessToken: "", panelId: "" });
   const [gen, setGen] = useState({ login: "", password: "" });
   const [smartLink, setSmartLink] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -328,7 +308,7 @@ export default function BrowsePage() {
     setCursorMode(false);
     setJumpError(null);
     setSaveError(null);
-    setAcc({ login: "", email: "", password: "", token: "", balance: "", aff: "" });
+    setAcc({ login: "", email: "", password: "", token: "", balance: "", aff: "", accessToken: "", panelId: "" });
   };
 
   const handleSaveAccount = () => {
@@ -346,6 +326,8 @@ export default function BrowsePage() {
       token: acc.token || null,
       balance: parseFloat(acc.balance.replace(",", ".")) || 0,
       aff: acc.aff || null,
+      access_token: acc.accessToken || null,
+      panel_id: parseInt(acc.panelId, 10) || null,
     };
     fetch(url, {
       method: "POST",
@@ -360,13 +342,20 @@ export default function BrowsePage() {
         return res.json();
       })
       .then(() => {
-        setAcc({ login: "", email: "", password: "", token: "", balance: "", aff: "" });
+        setAcc({ login: "", email: "", password: "", token: "", balance: "", aff: "", accessToken: "", panelId: "" });
         // шаг по id, а не по offset: сохранённый аккаунт выпал из выборки по сайту,
         // и offset+1 перескочил бы через следующий
         stepByCursor("after");
       })
       .catch((e: Error) => setSaveError(e.message));
   };
+
+  // на вкладке GitHub аккаунт на сайте заводится под логином и ящиком самой записи.
+  // Зовётся из колбэков fetch-а, а не из эффекта: setAcc прямо в теле эффекта даёт
+  // react-hooks/set-state-in-effect
+  const fillFromRecord = useCallback((a: Account) => {
+    setAcc((prev) => ({ ...prev, login: a.login ?? "", email: a.email ?? "" }));
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -381,12 +370,13 @@ export default function BrowsePage() {
         setJumpId(String(d.account.id));
         setJumpError(null);
         setCursorMode(false);
+        if (!isEmailTab) fillFromRecord(d.account);
       })
       .catch((e: Error) => {
         if (e.name !== "AbortError") setError(e.message);
       });
     return () => controller.abort();
-  }, [offset, selectedSiteId, browseBase, gmailParam]);
+  }, [offset, selectedSiteId, browseBase, gmailParam, isEmailTab, fillFromRecord]);
 
   const generateCreds = useCallback((email?: string) => {
     fetch("/api/generate-credentials")
@@ -428,6 +418,7 @@ export default function BrowsePage() {
           setTimeout(() => { setJumpError(null); setJumpFading(false); }, 5000);
         }
         setCursorMode(true);
+        if (!isEmailTab) fillFromRecord(d.account);
       })
       .catch((e: Error) => setJumpError(e.message));
   };
@@ -444,6 +435,7 @@ export default function BrowsePage() {
         setData((prev) => prev ? { ...prev, account: d.account } : prev);
         setJumpId(String(d.account.id));
         setCursorMode(true);
+        if (!isEmailTab) fillFromRecord(d.account);
       })
       .catch(() => {});
   };
@@ -467,21 +459,12 @@ export default function BrowsePage() {
   };
 
   const tabBar = (
-    <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
+    <div className="br-tabs" id="br-tabs">
       {([["email", "Почта"], ["github", "GitHub"], ["gmail", "Gmail"]] as [Tab, string][]).map(([key, label]) => (
         <button
           key={key}
           onClick={() => switchTab(key)}
-          style={{
-            border: "none",
-            borderBottom: tab === key ? "2px solid var(--accent)" : "2px solid transparent",
-            background: "none",
-            padding: "8px 16px",
-            fontSize: "0.95rem",
-            fontWeight: tab === key ? 600 : 400,
-            color: tab === key ? "var(--accent)" : "var(--text-muted)",
-            cursor: "pointer",
-          }}
+          className={`br-tab br-tab-${key}${tab === key ? " br-tab-active" : ""}`}
         >
           {label}
         </button>
@@ -489,8 +472,8 @@ export default function BrowsePage() {
     </div>
   );
 
-  if (error) return <main style={{ padding: "2rem" }}>{tabBar}<p style={{ color: "crimson" }}>Ошибка: {error}</p></main>;
-  if (!data) return <main style={{ padding: "2rem" }}>{tabBar}<p>Загрузка...</p></main>;
+  if (error) return <main className="br-page" id="browse">{tabBar}<p className="br-error">Ошибка: {error}</p></main>;
+  if (!data) return <main className="br-page" id="browse">{tabBar}<p className="br-loading">Загрузка...</p></main>;
 
   const { account, total } = data;
 
@@ -499,36 +482,33 @@ export default function BrowsePage() {
   const affUrl = /^https?:\/\//i.test(rawAff) ? rawAff : rawAff ? `https://${rawAff}` : "";
 
   return (
-    <main style={{ padding: "2rem" }}>
+    <main className="br-page" id="browse">
       {tabBar}
-      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
-        <select
-          value={selectedSite}
-          onChange={(e) => {
-            const site = sites.find((s) => s.name === e.target.value);
-            setSelectedSite(e.target.value);
-            if (site) setSelectedSiteId(site.id);
-          }}
-        >
-          {sites.map((s) => (
-            <option key={s.id} value={s.name}>{s.name}</option>
-          ))}
-        </select>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div className="br-toolbar">
+        <SiteSelect
+          className="br-site-select"
+          id="br-site-select"
+          sites={sites}
+          value={selectedSiteId}
+          onChange={(s) => { setSelectedSite(s.name); setSelectedSiteId(s.id); }}
+        />
+        <div className="br-site-add">
           <input
+            className="br-site-new"
+            id="br-site-new"
             type="text"
             value={newSiteName}
             onChange={(e) => setNewSiteName(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") handleAddSite(); }}
             placeholder="Новый сайт"
           />
-          <button onClick={handleAddSite}>Добавить</button>
+          <button className="br-site-add-btn" onClick={handleAddSite}>Добавить</button>
           {selectedSite && (
             <a
               href={`https://${selectedSite}`}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ marginLeft: 4, fontSize: "1.1rem" }}
+              className="br-site-link"
               title={`Открыть ${selectedSite}`}
             >
               ↗
@@ -537,9 +517,11 @@ export default function BrowsePage() {
         </div>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-        <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Реферал</span>
+      <div className="br-aff-row">
+        <span className="br-aff-label">Реферал</span>
         <select
+          className="br-aff-select"
+          id="br-aff-select"
           value={selectedAffId}
           onChange={(e) => setSelectedAffId(parseInt(e.target.value, 10))}
           disabled={!siteAccounts.length}
@@ -559,7 +541,7 @@ export default function BrowsePage() {
             href={affUrl}
             target="_blank"
             rel="noopener noreferrer"
-            style={{ marginLeft: 4, fontSize: "1.1rem" }}
+            className="br-aff-link"
             title={`Перейти: ${affUrl}`}
           >
             ↗
@@ -567,67 +549,68 @@ export default function BrowsePage() {
         )}
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <h2 style={{ margin: 0 }}>Запись ID</h2>
+      <div className="br-jump">
+        <h2 className="br-jump-title">Запись ID</h2>
         <input
+          className="br-jump-input"
+          id="br-jump-input"
           type="number"
           value={jumpId}
           onChange={(e) => setJumpId(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") handleJump(); }}
-          style={{ width: 80, fontSize: "1.1rem", fontWeight: "bold" }}
           min={1}
         />
         <button
           onClick={handleJump}
           title="Перейти"
-          style={{ border: "none", background: "none", color: "var(--accent)", fontSize: "1.2rem", padding: 4 }}
+          className="br-jump-go"
         >
           ➜
         </button>
       </div>
-      {jumpError && <p style={{ color: "#ff6b6b", margin: "4px 0", transition: "opacity 1s", opacity: jumpFading ? 0 : 1 }}>{jumpError}</p>}
-      <p style={{ color: "var(--text-muted)", marginBottom: "1rem", fontSize: "0.85rem" }}>
+      {jumpError && <p className={`br-jump-error${jumpFading ? " br-jump-error-fading" : ""}`}>{jumpError}</p>}
+      <p className="br-counter">
         {offset + 1} из {total} ({tab === "github" ? "active, @hotmail.com" : tab === "gmail" ? "active, только @gmail.com" : "active, без @gmail.com"})
       </p>
 
       {isEmailTab && (
-        <div style={{ marginBottom: "1rem" }}>
-          <h3 style={{ margin: "0 0 6px" }}>Правила получения кода</h3>
-          <div style={{ display: "flex", gap: 24, fontSize: "0.85rem" }}>
-            <span>
-              <span style={{ color: "var(--text-muted)" }}>тема письма: </span>
-              {siteRules?.mail_subject || <span style={{ opacity: 0.5 }}>не задана</span>}
+        <div className="br-rules" id="br-rules">
+          <h3 className="br-rules-title">Правила получения кода</h3>
+          <div className="br-rules-list">
+            <span className="br-rules-item">
+              <span className="br-rules-label">тема письма: </span>
+              {siteRules?.mail_subject || <span className="br-rules-empty">не задана</span>}
             </span>
-            <span>
-              <span style={{ color: "var(--text-muted)" }}>якорь: </span>
-              {siteRules?.code_anchor || <span style={{ opacity: 0.5 }}>не задан</span>}
+            <span className="br-rules-item">
+              <span className="br-rules-label">якорь: </span>
+              {siteRules?.code_anchor || <span className="br-rules-empty">не задан</span>}
             </span>
-            <span>
-              <span style={{ color: "var(--text-muted)" }}>символов в коде: </span>
-              {siteRules?.code_length ?? <span style={{ opacity: 0.5 }}>не задано</span>}
+            <span className="br-rules-item">
+              <span className="br-rules-label">символов в коде: </span>
+              {siteRules?.code_length ?? <span className="br-rules-empty">не задано</span>}
             </span>
-            <span>
-              <span style={{ color: "var(--text-muted)" }}>формат: </span>
+            <span className="br-rules-item">
+              <span className="br-rules-label">формат: </span>
               {siteRules?.code_format === "alnum" ? "цифры и буквы" : "только цифры"}
             </span>
           </div>
         </div>
       )}
 
-      <div style={{ background: "var(--card-bg)", borderRadius: 8, boxShadow: "var(--card-shadow)", padding: 16 }}>
+      <div className="br-card" id="br-record">
       {tab === "github" ? (
-      <table style={{ width: "auto" }}>
-        <tbody>
-          <tr>
+      <table className="br-table br-table-github">
+        <tbody className="br-table-body">
+          <tr className="br-row">
             <Field label="login" value={account.login} onCopy={(v) => setAcc((a) => ({ ...a, login: v }))} />
             <Field label="pass_github" value={account.pass_github} />
           </tr>
-          <tr>
+          <tr className="br-row">
             <Field label="email" value={account.email} onCopy={(v) => setAcc((a) => ({ ...a, email: v }))} />
             <Field label="pass_email" value={account.pass_email} />
             <CheckMailBtn key={account.login} email={account.email} type="outlook" />
           </tr>
-          <tr>
+          <tr className="br-row">
             <Field label="restore_email" value={account.restore_email} />
             <Field label="restore_pass" value={account.restore_pass} />
             <CheckMailBtn key={account.login} email={account.restore_email} type="rambler" />
@@ -635,22 +618,22 @@ export default function BrowsePage() {
         </tbody>
       </table>
       ) : (
-      <table style={{ width: "auto" }}>
-        <tbody>
-          <tr>
+      <table className="br-table br-table-email">
+        <tbody className="br-table-body">
+          <tr className="br-row">
             <Field label="login" value={gen.login} />
             <Field label="password" value={gen.password} />
-            <td style={{ padding: "6px 16px 6px 0", verticalAlign: "bottom" }}>
+            <td className="br-gen-cell">
               <button
                 onClick={() => generateCreds()}
                 title="Сгенерировать заново"
-                style={{ border: "none", background: "none", color: "var(--accent)", fontSize: "1.1rem", padding: 4, cursor: "pointer" }}
+                className="br-gen-refresh"
               >
                 ↻
               </button>
             </td>
           </tr>
-          <tr>
+          <tr className="br-row">
             <Field label="email" value={account.email} onCopy={(v) => setAcc((a) => ({ ...a, email: v }))} />
             <Field label="password" value={account.password} />
             <CheckMailBtn
@@ -664,7 +647,7 @@ export default function BrowsePage() {
               disabled={!siteRules?.mail_subject}
             />
           </tr>
-          <tr>
+          <tr className="br-row">
             <Field label="restore_email" value={account.restore_email} />
             <Field label="restore_pass" value={account.restore_pass} />
             <CheckMailBtn
@@ -683,18 +666,18 @@ export default function BrowsePage() {
       )}
       </div>
 
-      <div style={{ marginTop: "1.5rem", display: "flex", gap: 12 }}>
-        <button onClick={handlePrev} disabled={!cursorMode && offset === 0}>
+      <div className="br-nav">
+        <button className="br-nav-prev" onClick={handlePrev} disabled={!cursorMode && offset === 0}>
           ← Назад
         </button>
-        <button onClick={handleNext} disabled={!cursorMode && offset >= total - 1}>
+        <button className="br-nav-next" onClick={handleNext} disabled={!cursorMode && offset >= total - 1}>
           Вперёд →
         </button>
       </div>
 
-      <div style={{ marginTop: "2rem" }}>
-        <h3>Уровень брака</h3>
-        <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
+      <div className="br-flaws" id="br-flaws">
+        <h3 className="br-flaws-title">Уровень брака</h3>
+        <div className="br-flaws-list">
           {tab === "github" ? (
             <>
               <ErrorBtn key={`rambler-${account.login}`} value={account.restore_email} field="restore_email" action="Bad Rambler Email" onMarked={() => stepByCursor("after")} />
@@ -716,25 +699,30 @@ export default function BrowsePage() {
               ))}
             </>
           )}
+          {/* имя ключа на сайте всегда одно и то же — копируем, чтобы не набирать руками */}
+          <span className="br-mykey">
+            My Key
+            <CopyBtn value="My Key" />
+          </span>
         </div>
       </div>
 
-      <div style={{ marginTop: "2rem", background: "var(--card-bg)", borderRadius: 8, boxShadow: "var(--card-shadow)", padding: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <h3>Аккаунт на сайте</h3>
+      <div className="br-card br-acc-card" id="br-acc">
+        <div className="br-acc-head">
+          <h3 className="br-acc-title">Аккаунт на сайте</h3>
           {tab === "github" && (
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.8rem", color: "var(--text-muted)", cursor: "pointer" }}>
+          <label className="br-smart-link">
             <input
               type="checkbox"
               checked={smartLink}
               onChange={(e) => setSmartLink(e.target.checked)}
-              style={{ width: 14, height: 14, accentColor: "var(--accent)", padding: 0 }}
+              className="br-smart-link-box"
             />
             Умная привязка
           </label>
           )}
         </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <div className="br-acc-row br-acc-row-first">
           <AccInput
             placeholder="login_site"
             value={acc.login}
@@ -758,7 +746,7 @@ export default function BrowsePage() {
           )}
         </div>
         {isEmailTab && (
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <div className="br-acc-row br-acc-row-email">
             <AccInput
               placeholder="email_site"
               value={acc.email}
@@ -767,7 +755,7 @@ export default function BrowsePage() {
             />
           </div>
         )}
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <div className="br-acc-row br-acc-row-token">
           <AccInput
             placeholder="token"
             value={acc.token}
@@ -781,7 +769,7 @@ export default function BrowsePage() {
             flex={1}
           />
         </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+        <div className="br-acc-row br-acc-row-aff">
           <AccInput
             placeholder="aff (URL)"
             value={acc.aff}
@@ -789,13 +777,27 @@ export default function BrowsePage() {
             flex={1}
           />
           {acc.aff && (
-            <a href={acc.aff} target="_blank" rel="noopener noreferrer" style={{ fontSize: "1.1rem" }} title="Открыть aff">↗</a>
+            <a href={acc.aff} target="_blank" rel="noopener noreferrer" className="br-acc-aff-link" title="Открыть aff">↗</a>
           )}
         </div>
-        <div style={{ marginTop: 12 }}>
-          <button onClick={handleSaveAccount}>Сохранить</button>
+        <div className="br-acc-row br-acc-row-panel">
+          <AccInput
+            placeholder="токен доступа"
+            value={acc.accessToken}
+            onChange={(v) => setAcc((a) => ({ ...a, accessToken: v }))}
+            flex={4}
+          />
+          <AccInput
+            placeholder="ID на сайте"
+            value={acc.panelId}
+            onChange={(v) => setAcc((a) => ({ ...a, panelId: v }))}
+            flex={1}
+          />
         </div>
-        {saveError && <p style={{ color: "#ff6b6b", marginTop: 8, fontSize: "0.8rem" }}>{saveError}</p>}
+        <div className="br-acc-save">
+          <button className="br-btn-save" id="br-btn-save" onClick={handleSaveAccount}>Сохранить</button>
+        </div>
+        {saveError && <p className="br-save-error">{saveError}</p>}
       </div>
     </main>
   );

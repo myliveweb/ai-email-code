@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "curl-cffi>=0.16.1",
     "fastapi>=0.141.1",
     "langchain>=1.2.6",
     "langchain-community>=0.4.1",
@@ -21,3 +22,20 @@ dependencies = [
     "tavily-python>=0.7.19",
     "uvicorn[standard]>=0.52.3",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# Форматтер не включаем намеренно: он перекладывает файлы целиком, и правки Босса
+# утонули бы в диффе. Из проверок — только настоящие ошибки и мёртвый код.
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B"]

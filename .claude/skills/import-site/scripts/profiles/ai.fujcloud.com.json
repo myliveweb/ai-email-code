@@ -1,0 +1,64 @@
+{
+  "separator": "^\\s*[=\\-]{5,}\\s*$",
+  "note_marker": "---",
+  "required": ["login", "email", "token"],
+  "dedupe_by": ["email", "token"],
+  "note_clean": ["^\\d[\\d\\s]*"],
+  "fields": {
+    "login_email": {
+      "regex": "^([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\\.[A-Za-z]{2,})$",
+      "targets": {"login": 1, "email": 0},
+      "cast": "lower",
+      "const": {"password": "Metropoliten911!", "balance": 7000}
+    },
+    "token": {
+      "regex": "^(sk-[A-Za-z0-9]{20,})$",
+      "note_to": "note"
+    },
+    "access_token": {
+      "regex": "^([A-Za-z0-9+/=]{20,}=)$",
+      "note_regex": "access\\s*token",
+      "if_missing": "-"
+    },
+    "panel_id": {
+      "regex": "^User ID\\s+(\\d+)$",
+      "cast": "int",
+      "if_missing": "-"
+    },
+    "aff": {
+      "regex": "^https?://ai\\.fujcloud\\.com/sign-up\\?aff=(\\S+)$",
+      "if_missing": "-"
+    }
+  },
+  "noise": [
+    "^https?://ai\\.fujcloud\\.com/?$",
+    "^https?://ai\\.fujcloud\\.com/v1/?$",
+    "^My [Kk]ey$",
+    "^Metropoliten911!$",
+    "^[\\d\\s]+Current Balance$",
+    "^curl\\b",
+    "^-[HdX]\\s"
+  ],
+  "overrides": [
+    {
+      "match": {"email": "myliveweb@gmail.com"},
+      "set": {
+        "balance": 41134,
+        "token": "sk-xRZZC0TXmuGT3h6cf6iQ9LdAH3enCbXtyJQJzcR9Eu1WpYGx",
+        "note": "5 ключей аккаунта: kiro 0.0055x -99% (My Key kiro, основной, opus-4-8/5) sk-xRZZC0TXmuGT3h6cf6iQ9LdAH3enCbXtyJQJzcR9Eu1WpYGx | codex 0.015x -99% (My Key codex, gpt-5.6-terra/luna) sk-28KJXVr4Zal88bg0ElxUhzUu3lBpKA71ai1hn2HXEsDrQX6N | x-ai 0.015x -99% (My key x-ai, grok-4.6) sk-pGXztQ1FsX4i9PzAlyoU9yzGZz6p9LpJzFVI0aC1j2LuRhZ4 | Moonshot 0.03x -97% (Moonshot, kimi-k3, deepseek-v4-flash) sk-31RMZLFcK37RQXFqLnUcIyeIM0HwpeaahpFtEcBC9TbLdqZu | default 0.13x -87% (Image, картинки gpt-image-2, 65 за штуку) sk-YcjFv5d2LUEi28pD35qhWcTFABz3QckgEgOigAD2AdLvLV8q. Группы claude и image мертвы. Пароль ящика — otstoy16, не Metropoliten911!"
+      }
+    },
+    {
+      "match": {"email": "liamantoine31@gmail.com"},
+      "set": {"aff": "-"}
+    },
+    {
+      "match": {"email": "tonyprmer@gmail.com"},
+      "set": {
+        "balance": 6480,
+        "access_token": "RLZPze+hQIAC+ysLNBm+8lQyW1KU",
+        "panel_id": 174
+      }
+    }
+  ]
+}

@@ -91,6 +91,9 @@ def main() -> None:
             "token": b.get("token"),
             "balance": float(str(b["balance"]).replace(",", ".")) if b.get("balance") else 0,
             "aff": b.get("aff"),
+            "note": b.get("note"),
+            "access_token": b.get("access_token"),
+            "panel_id": int(b["panel_id"]) if b.get("panel_id") else None,
         }
         if args.custom:
             payload["email_id"] = 0  # при smart_link не используется, backend берёт из main_email

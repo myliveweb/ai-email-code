@@ -18,6 +18,12 @@ source/
 data/
 log/
 
+# Дампы базы и стороджа: там данные всех проектов общей Supabase
+backup/
+
+# Заметки Босса по сессиям Claude Code — лежат в корне на виду, но не в репозитории
+????????-????-????-????-????????????.txt
+
 # Артефакты agent-browser
 --full-page
 --fullPage
@@ -27,3 +33,11 @@ log/
 node_modules/
 .next/
 tsconfig.tsbuildinfo
+
+# Резервные копии .env — там те же секреты, что и в самом .env
+.env.*
+
+# Артефакты playwright MCP и замок планировщика
+.playwright-mcp/
+.claude/scheduled_tasks.lock
+.vscode/

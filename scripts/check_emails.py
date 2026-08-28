@@ -9,12 +9,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend.app.config import allow_direct_localhost
+from backend.app.config import allow_direct_localhost  # noqa: E402
 allow_direct_localhost()
 
-from backend.app.supabase_client import get_supabase
-from outlook_mail_checker import check_mailboxes_bulk as outlook_bulk
-from rambler_imap_mail_checker import check_mailboxes_bulk as rambler_bulk
+from backend.app.supabase_client import get_supabase  # noqa: E402
+from outlook_mail_checker import check_mailboxes_bulk as outlook_bulk  # noqa: E402
+from rambler_imap_mail_checker import check_mailboxes_bulk as rambler_bulk  # noqa: E402
 
 
 def main():
@@ -134,7 +134,7 @@ def main():
     print(f"\n{'='*60}")
     print(f"ИТОГО: {len(alive)} живых, {len(dead)} мёртвых из {len(lines)}")
     if dead:
-        print(f"\nМёртвые:")
+        print("\nМёртвые:")
         for e in sorted(dead):
             print(f"  {e}")
 

@@ -3,32 +3,45 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import ClaudeIcon from "./ClaudeIcon";
+import { useActiveStation } from "../lib/activeStation";
+
 const NAV_ITEMS = [
   { href: "/sites", label: "Сайты" },
   { href: "/", label: "Аккаунты" },
   { href: "/browse", label: "Менеджмент" },
+  { href: "/linuxdo", label: "linux.do" },
 ];
 
 export default function Nav() {
   const pathname = usePathname();
+  const active = useActiveStation();
 
   return (
-    <nav style={{ display: "flex", gap: 24, padding: "14px 2rem", background: "var(--nav-bg)", borderBottom: "1px solid var(--border)" }}>
-      {NAV_ITEMS.map((item) => (
-        <Link
-          key={item.href}
-          href={item.href}
-          style={{
-            textDecoration: "none",
-            fontWeight: pathname === item.href ? "600" : "400",
-            color: pathname === item.href ? "var(--accent)" : "var(--text-muted)",
-            fontSize: "0.9rem",
-            transition: "color 0.15s",
-          }}
-        >
-          {item.label}
-        </Link>
-      ))}
+    <nav id="nav" className="cm-nav">
+      <div className="cm-nav-links">
+        {NAV_ITEMS.map((item) => (
+          <Link
+            key={item.href}
+            href={item.href}
+            className={
+              pathname === item.href ? "cm-nav-link cm-nav-link-active" : "cm-nav-link"
+            }
+          >
+            {item.label}
+          </Link>
+        ))}
+      </div>
+
+      <div className="cm-nav-active" id="cm-nav-active" title="станция и аккаунт Claude Code">
+        <ClaudeIcon />
+        {active && (
+          <span className="cm-nav-active-text">
+            <span className="cm-nav-active-station">{active.station ?? "станция не наша"}</span>
+            <span className="cm-nav-active-login">{active.login ?? "ключ вне базы"}</span>
+          </span>
+        )}
+      </div>
     </nav>
   );
 }

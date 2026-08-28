@@ -1,11 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import LongText from "../components/LongText";
+import ClaudeIcon from "../components/ClaudeIcon";
+import SiteSelect from "../components/SiteSelect";
+import { useActiveStation } from "../lib/activeStation";
+import { TOPIC_CLAUDE, useLiveUpdate } from "../lib/liveUpdates";
 import { SITE_KEY, pickStickyId, rememberId } from "../lib/sticky";
 
 type Site = {
   id: number;
   name: string;
+  cnt: number | null;
   meta: Record<string, unknown>;
   mail_subject: string | null;
   code_anchor: string | null;
@@ -22,35 +28,42 @@ type SiteStats = {
   total_balance: number;
 };
 
+type Station = {
+  site_id: number;
+  balance: number;
+  login: string;
+  can_activate: boolean;
+};
+
 function fmt(n: number) {
   return Number(n.toFixed(2)).toLocaleString("ru-RU");
 }
 
 function StatCell({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div>
-      <div style={{ color: "var(--text-muted)", fontSize: "0.75rem", marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: "1.3rem", fontWeight: 600, color: accent ? "var(--accent)" : undefined }}>{value}</div>
+    <div className="st-stat">
+      <div className="st-stat-label">{label}</div>
+      <div className={accent ? "st-stat-value st-stat-value--accent" : "st-stat-value"}>{value}</div>
     </div>
   );
 }
 
 function MetaValue({ value }: { value: unknown }) {
   if (value === null || value === undefined) {
-    return <span style={{ opacity: 0.5 }}>—</span>;
+    return <span className="st-dash">—</span>;
   }
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>);
-    if (!entries.length) return <span style={{ opacity: 0.5 }}>{"{}"}</span>;
+    if (!entries.length) return <span className="st-dash">{"{}"}</span>;
     return (
-      <table style={{ width: "auto", borderCollapse: "collapse" }}>
-        <tbody>
+      <table className="st-meta-nested">
+        <tbody className="st-meta-nested-body">
           {entries.map(([k, v]) => (
-            <tr key={k}>
-              <td style={{ padding: "2px 12px 2px 0", verticalAlign: "top", color: "var(--text-muted)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
+            <tr key={k} className="st-meta-nested-row">
+              <td className="st-meta-nested-key">
                 {k}
               </td>
-              <td style={{ padding: "2px 0", verticalAlign: "top" }}>
+              <td className="st-meta-nested-value">
                 <MetaValue value={v} />
               </td>
             </tr>
@@ -62,12 +75,12 @@ function MetaValue({ value }: { value: unknown }) {
   const text = String(value);
   if (/^https?:\/\//.test(text)) {
     return (
-      <a href={text} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>
+      <a href={text} target="_blank" rel="noopener noreferrer" className="st-meta-link">
         {text}
       </a>
     );
   }
-  return <span>{text}</span>;
+  return <LongText text={text} />;
 }
 
 export default function SitesPage() {
@@ -84,10 +97,40 @@ export default function SitesPage() {
   const [draftFormat, setDraftFormat] = useState("digits");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState<SiteStats | null>(null);
+  // вместе с цифрами держим сайт, которому они принадлежат: иначе при переключении
+  // пришлось бы гасить их setState прямо в эффекте, а это запрещено правилом
+  // react-hooks/set-state-in-effect
+  const [stats, setStats] = useState<{ siteId: number; data: SiteStats | null } | null>(null);
   const [addingKey, setAddingKey] = useState(false);
   const [keyName, setKeyName] = useState("");
   const [keyValue, setKeyValue] = useState("");
+  const [stations, setStations] = useState<Record<string, Station>>({});
+  const [switchedTo, setSwitchedTo] = useState<string | null>(null);
+  const [activating, setActivating] = useState(false);
+  const [claudeMsg, setClaudeMsg] = useState<string | null>(null);
+  const active = useActiveStation();
+
+  const loadStations = useCallback(() => {
+    fetch("/api/claude/stations")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((d: { stations?: Record<string, Station> } | null) => setStations(d?.stations ?? {}))
+      .catch(() => {});
+  }, []);
+
+  const loadStats = useCallback((id: number, signal?: AbortSignal) => {
+    fetch(`/api/sites/${id}/stats`, { signal })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((d: SiteStats | null) => setStats({ siteId: id, data: d }))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { loadStations(); }, [loadStations]);
+
+  // крон-скрипт закончил прогон: метки станций и балансы в базе уже другие
+  useLiveUpdate(TOPIC_CLAUDE, useCallback(() => {
+    loadStations();
+    if (selectedId) loadStats(selectedId);
+  }, [loadStations, loadStats, selectedId]));
 
   useEffect(() => {
     fetch("/api/sites")
@@ -106,17 +149,15 @@ export default function SitesPage() {
   useEffect(() => { rememberId(SITE_KEY, selectedId); }, [selectedId]);
 
   const site = sites.find((s) => s.id === selectedId) ?? null;
+  // цифры прежнего сайта не показываем: пока не пришли свои, здесь null
+  const siteStats = stats && stats.siteId === selectedId ? stats.data : null;
 
   useEffect(() => {
-    if (!selectedId) { setStats(null); return; }
+    if (!selectedId) return;
     const controller = new AbortController();
-    setStats(null);
-    fetch(`/api/sites/${selectedId}/stats`, { signal: controller.signal })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((d: SiteStats | null) => setStats(d))
-      .catch(() => {});
+    loadStats(selectedId, controller.signal);
     return () => controller.abort();
-  }, [selectedId]);
+  }, [selectedId, loadStats]);
 
   const handleAddSite = () => {
     const name = newSiteName.trim();
@@ -231,6 +272,27 @@ export default function SitesPage() {
       .catch((e: Error) => setError(e.message));
   };
 
+  const handleActivate = () => {
+    if (!site) return;
+    setClaudeMsg(null);
+    setActivating(true);
+    fetch("/api/claude/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ site_id: site.id }),
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail || "Ошибка переключения");
+        return res.json();
+      })
+      .then((d: { login?: string }) => {
+        setSwitchedTo(site.name);
+        setClaudeMsg(`Ключ ${d.login ?? ""} записан. Новую станцию подхватит следующая сессия.`);
+      })
+      .catch((e: Error) => setClaudeMsg(e.message))
+      .finally(() => setActivating(false));
+  };
+
   const handleDeleteSite = () => {
     if (!site) return;
     if (!confirm(`Удалить сайт «${site.name}»? Действие необратимо.`)) return;
@@ -249,22 +311,29 @@ export default function SitesPage() {
       .catch((e: Error) => setError(e.message));
   };
 
-  if (loading) return <main style={{ padding: "2rem" }}><p>Загрузка...</p></main>;
+  if (loading) return <main id="sites" className="st-page"><p className="st-loading">Загрузка...</p></main>;
 
   const metaEntries = Object.entries(site?.meta ?? {});
+  const station = site ? stations[site.name] : undefined;
+  const activeName = switchedTo ?? active?.station ?? null;
+  const isActive = !!site && site.name === activeName;
+  // ничего не выводим, когда станция не годна: нет claude-opus-5, мало денег или не отвечает
+  const showClaude = isActive || !!station?.can_activate;
 
   return (
-    <main style={{ padding: "2rem" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-        <select value={selectedId} onChange={(e) => { setSelectedId(Number(e.target.value)); setEditing(false); }}>
-          {sites.map((s) => (
-            <option key={s.id} value={s.id}>{s.name}</option>
-          ))}
-        </select>
+    <main id="sites" className="st-page">
+      <div className="st-toolbar">
+        <SiteSelect
+          className="st-site-select"
+          sites={sites}
+          value={selectedId}
+          onChange={(s) => { setSelectedId(s.id); setEditing(false); setClaudeMsg(null); }}
+        />
         {adding ? (
           <>
             <input
               autoFocus
+              className="st-new-site-input"
               value={newSiteName}
               onChange={(e) => setNewSiteName(e.target.value)}
               onKeyDown={(e) => {
@@ -273,139 +342,146 @@ export default function SitesPage() {
               }}
               placeholder="Новый сайт"
             />
-            <button onClick={handleAddSite}>Добавить</button>
-            <button onClick={() => { setAdding(false); setNewSiteName(""); }}>Отмена</button>
+            <button className="st-btn-add-site" onClick={handleAddSite}>Добавить</button>
+            <button className="st-btn-add-cancel" onClick={() => { setAdding(false); setNewSiteName(""); }}>Отмена</button>
           </>
         ) : (
           <button
+            className="st-btn-plus"
             onClick={() => setAdding(true)}
             title="Добавить сайт"
-            style={{ fontSize: "1.1rem", lineHeight: 1, padding: "2px 10px" }}
           >
             +
           </button>
         )}
       </div>
 
-      {error && <p style={{ color: "#ff6b6b", marginBottom: 12, fontSize: "0.85rem" }}>{error}</p>}
+      {error && <p className="st-error">{error}</p>}
 
       {!site ? (
-        <p style={{ color: "var(--text-muted)" }}>Сайтов пока нет.</p>
+        <p className="st-empty">Сайтов пока нет.</p>
       ) : (
-        <div style={{ background: "var(--card-bg)", borderRadius: 8, boxShadow: "var(--card-shadow)", padding: 20 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <div className="st-card">
+          <div className="st-header">
             {editing ? (
               <input
+                className="st-name-input"
                 value={draftName}
                 onChange={(e) => setDraftName(e.target.value)}
-                style={{ fontSize: "1.3rem", fontWeight: 600, flex: 1, maxWidth: 360 }}
               />
             ) : (
               <>
-                <h2 style={{ margin: 0 }}>{site.name}</h2>
+                <h2 className="st-title">{site.name}</h2>
                 <a
+                  className="st-site-link"
                   href={`https://${site.name}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   title={`Открыть ${site.name}`}
-                  style={{ fontSize: "1.1rem" }}
                 >
                   ↗
                 </a>
               </>
             )}
             <button
+              className="st-btn-edit"
               onClick={editing ? () => setEditing(false) : startEdit}
               title={editing ? "Отменить" : "Редактировать название и meta"}
-              style={{ marginLeft: "auto", fontSize: "0.85rem" }}
             >
               {editing ? "Отмена" : "✎ Редактировать"}
             </button>
           </div>
 
-          {stats && (
-            <div
-              style={{
-                display: "flex",
-                gap: 40,
-                flexWrap: "wrap",
-                padding: "14px 0",
-                borderTop: "1px solid var(--border)",
-                borderBottom: "1px solid var(--border)",
-                marginBottom: 20,
-              }}
-            >
-              <StatCell label="Аккаунтов всего" value={String(stats.total_count)} accent />
-              <StatCell label="GitHub" value={String(stats.github_count)} />
-              <StatCell label="Почтовых" value={String(stats.email_count)} />
-              <StatCell label="Баланс всего" value={fmt(stats.total_balance)} accent />
-              <StatCell label="Баланс GitHub" value={fmt(stats.github_balance)} />
-              <StatCell label="Баланс почтовых" value={fmt(stats.email_balance)} />
+          {siteStats && (
+            <div className="st-stats">
+              <StatCell label="Аккаунтов всего" value={String(siteStats.total_count)} accent />
+              <StatCell label="GitHub" value={String(siteStats.github_count)} />
+              <StatCell label="Почтовых" value={String(siteStats.email_count)} />
+              <StatCell label="Баланс всего" value={fmt(siteStats.total_balance)} accent />
+              <StatCell label="Баланс GitHub" value={fmt(siteStats.github_balance)} />
+              <StatCell label="Баланс почтовых" value={fmt(siteStats.email_balance)} />
+              {showClaude && (
+                <div className="st-claude" id="st-claude" title={
+                  isActive ? "Claude Code работает на этой станции" : "переключить сессию на эту станцию"
+                }>
+                  <ClaudeIcon
+                    className={isActive ? "st-claude-icon st-claude-icon--active" : "st-claude-icon st-claude-icon--idle"}
+                  />
+                  {isActive ? (
+                    <span className="st-claude-state">Активен</span>
+                  ) : (
+                    <button className="st-btn-activate" onClick={handleActivate} disabled={activating}>
+                      {activating ? "Переключаю..." : "Активировать"}
+                    </button>
+                  )}
+                  {claudeMsg && <span className="st-claude-msg">{claudeMsg}</span>}
+                </div>
+              )}
             </div>
           )}
 
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ color: "var(--text-muted)", fontSize: "0.75rem", marginBottom: 6 }}>
+          <div className="st-rules">
+            <div className="st-rules-label">
               Правила получения кода
             </div>
             {editing ? (
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <div className="st-rules-form">
                 <input
+                  className="st-input-subject"
                   value={draftSubject}
                   onChange={(e) => setDraftSubject(e.target.value)}
                   placeholder="тема письма"
-                  style={{ width: 420 }}
                 />
                 <input
+                  className="st-input-anchor"
                   value={draftAnchor}
                   onChange={(e) => setDraftAnchor(e.target.value)}
                   placeholder="якорь"
-                  style={{ width: 240 }}
                 />
                 <input
+                  className="st-input-length"
                   value={draftDigits}
                   onChange={(e) => setDraftDigits(e.target.value)}
                   placeholder="символов в коде"
                   inputMode="numeric"
-                  style={{ width: 140 }}
                 />
-                <select value={draftFormat} onChange={(e) => setDraftFormat(e.target.value)}>
+                <select className="st-select-format" value={draftFormat} onChange={(e) => setDraftFormat(e.target.value)}>
                   <option value="digits">только цифры</option>
                   <option value="alnum">цифры и буквы</option>
                 </select>
               </div>
             ) : (
-              <table style={{ width: "auto", borderCollapse: "collapse" }}>
-                <tbody>
-                  <tr>
-                    <td style={{ padding: "2px 24px 2px 0", color: "var(--text-muted)", fontSize: "0.8rem" }}>
+              <table className="st-rules-table">
+                <tbody className="st-rules-body">
+                  <tr className="st-rules-row">
+                    <td className="st-rules-key">
                       тема письма
                     </td>
-                    <td style={{ padding: "2px 0" }}>
-                      {site.mail_subject || <span style={{ opacity: 0.5 }}>—</span>}
+                    <td className="st-rules-value">
+                      {site.mail_subject || <span className="st-dash">—</span>}
                     </td>
                   </tr>
-                  <tr>
-                    <td style={{ padding: "2px 24px 2px 0", color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                  <tr className="st-rules-row">
+                    <td className="st-rules-key">
                       якорь
                     </td>
-                    <td style={{ padding: "2px 0" }}>
-                      {site.code_anchor || <span style={{ opacity: 0.5 }}>—</span>}
+                    <td className="st-rules-value">
+                      {site.code_anchor || <span className="st-dash">—</span>}
                     </td>
                   </tr>
-                  <tr>
-                    <td style={{ padding: "2px 24px 2px 0", color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                  <tr className="st-rules-row">
+                    <td className="st-rules-key">
                       символов в коде
                     </td>
-                    <td style={{ padding: "2px 0" }}>
-                      {site.code_length ?? <span style={{ opacity: 0.5 }}>—</span>}
+                    <td className="st-rules-value">
+                      {site.code_length ?? <span className="st-dash">—</span>}
                     </td>
                   </tr>
-                  <tr>
-                    <td style={{ padding: "2px 24px 2px 0", color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                  <tr className="st-rules-row">
+                    <td className="st-rules-key">
                       формат кода
                     </td>
-                    <td style={{ padding: "2px 0" }}>
+                    <td className="st-rules-value">
                       {site.code_format === "alnum" ? "цифры и буквы" : "только цифры"}
                     </td>
                   </tr>
@@ -415,11 +491,12 @@ export default function SitesPage() {
           </div>
 
           {!editing && (
-            <div style={{ marginBottom: 14 }}>
+            <div className="st-key-add">
               {addingKey ? (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div className="st-key-form">
                   <input
                     autoFocus
+                    className="st-key-name-input"
                     value={keyName}
                     onChange={(e) => setKeyName(e.target.value)}
                     onKeyDown={(e) => {
@@ -427,9 +504,9 @@ export default function SitesPage() {
                       if (e.key === "Escape") cancelAddKey();
                     }}
                     placeholder="ключ"
-                    style={{ width: 200 }}
                   />
                   <input
+                    className="st-key-value-input"
                     value={keyValue}
                     onChange={(e) => setKeyValue(e.target.value)}
                     onKeyDown={(e) => {
@@ -437,13 +514,12 @@ export default function SitesPage() {
                       if (e.key === "Escape") cancelAddKey();
                     }}
                     placeholder="значение"
-                    style={{ width: 420 }}
                   />
-                  <button onClick={handleAddKey}>Сохранить</button>
-                  <button onClick={cancelAddKey}>Отмена</button>
+                  <button className="st-btn-key-save" onClick={handleAddKey}>Сохранить</button>
+                  <button className="st-btn-key-cancel" onClick={cancelAddKey}>Отмена</button>
                 </div>
               ) : (
-                <button onClick={() => setAddingKey(true)} style={{ fontSize: "0.85rem" }}>
+                <button className="st-btn-key-add" onClick={() => setAddingKey(true)}>
                   + Добавить ключ
                 </button>
               )}
@@ -453,32 +529,26 @@ export default function SitesPage() {
           {editing ? (
             <>
               <textarea
+                className="st-meta-editor"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 spellCheck={false}
-                style={{
-                  width: "100%",
-                  minHeight: 320,
-                  fontFamily: "var(--font-geist-mono), monospace",
-                  fontSize: "0.85rem",
-                  resize: "vertical",
-                }}
               />
-              <div style={{ marginTop: 12 }}>
-                <button onClick={handleSaveMeta}>Сохранить</button>
+              <div className="st-meta-editor-actions">
+                <button className="st-btn-save-meta" onClick={handleSaveMeta}>Сохранить</button>
               </div>
             </>
           ) : metaEntries.length === 0 ? (
-            <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>meta пуст.</p>
+            <p className="st-meta-empty">meta пуст.</p>
           ) : (
-            <table style={{ width: "auto", borderCollapse: "collapse" }}>
-              <tbody>
+            <table className="st-meta-table">
+              <tbody className="st-meta-body">
                 {metaEntries.map(([key, value]) => (
-                  <tr key={key} style={{ borderTop: "1px solid var(--border)" }}>
-                    <td style={{ padding: "10px 24px 10px 0", verticalAlign: "top", fontWeight: 600, whiteSpace: "nowrap" }}>
+                  <tr key={key} className="st-meta-row">
+                    <td className="st-meta-key">
                       {key}
                     </td>
-                    <td style={{ padding: "10px 0", verticalAlign: "top" }}>
+                    <td className="st-meta-value">
                       <MetaValue value={value} />
                     </td>
                   </tr>
@@ -487,16 +557,11 @@ export default function SitesPage() {
             </table>
           )}
 
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 28 }}>
+          <div className="st-card-footer">
             <button
+              className="st-btn-delete"
               onClick={handleDeleteSite}
               title="Удалить сайт целиком"
-              style={{
-                fontSize: "0.85rem",
-                color: "#ff6b6b",
-                borderColor: "#ff6b6b",
-                background: "transparent",
-              }}
             >
               Удалить сайт
             </button>

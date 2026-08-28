@@ -5,15 +5,20 @@
 `main_site_account` — один аккаунт на одном сайте. Один блок из файла = одна строка.
 
 ```
-id         bigint  PK
-site_id    bigint  NOT NULL  -> main_site(id)
-github_id  bigint  NOT NULL  -> main_github(id)   без DEFAULT, нулём быть не может
-login      text              логин на сайте
-email      text              email на сайте
-token      text              API-ключ
-balance    numeric
-aff        text              своя партнёрская ссылка
+id           bigint  PK
+site_id      bigint  NOT NULL  -> main_site(id)
+github_id    bigint  NOT NULL  -> main_github(id)   без DEFAULT, нулём быть не может
+login        text              логин на сайте
+email        text              email на сайте
+token        text              API-ключ
+balance      numeric
+aff          text              своя партнёрская ссылка
+note         text              примечание по аккаунту (сюда едет хвост после `---`)
+access_token text              токен панели, если сайт такое умеет
+panel_id     int               id пользователя в панели, идёт в паре с access_token
 ```
+
+`note`, `access_token` и `panel_id` необязательны, но `import_clean.py` их шлёт: `note` собирается парсером из пометок (`note_to`), пара `access_token` + `panel_id` нужна, чтобы читать баланс аккаунта из панели New API без cookies — одного токена мало, панель требует id.
 
 Уникальность (индексы созданы 2026-08-17):
 
@@ -32,7 +37,8 @@ main_site_account_site_github_key  UNIQUE (site_id, github_id)
 Создана 2026-08-17 под api.mhoo.cc, где ни один аккаунт не заведён через GitHub. Та же модель, но вместо `github_id` — `email_id` с FK на `main_email(id)`, плюс колонка `password` открытым текстом: пароль на сайте не совпадает с паролем от ящика, вывести его из `main_email` нельзя (проверено на трёх адресах — в документе `Metropoliten911!`, в `main_email.password` совсем другое, `restore_pass` пуст). Босс разрешил хранить открыто.
 
 ```
-id, site_id -> main_site(id), email_id -> main_email(id), email, login, password, token, balance, aff, created_at
+id, site_id -> main_site(id), email_id -> main_email(id), email, login, password, token,
+balance, aff, note, access_token, panel_id, created_at
 ```
 
 Уникальность — та же тройка: `(site_id, email)`, `(site_id, login)` (частичные, `WHERE ... IS NOT NULL`), `(site_id, email_id)`.

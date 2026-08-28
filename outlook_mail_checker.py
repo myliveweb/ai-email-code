@@ -38,7 +38,6 @@ from typing import Dict, List, Optional
 
 import requests
 
-from tools.io_files import save_count_file, save_list_file
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +52,7 @@ FOLDERS_TO_CHECK = ("inbox", "junkemail")
 DEFAULT_TARGET_FOLDER = "archive"
 
 # Поля письма, которые нас интересуют (уменьшает объём ответа)
-MESSAGE_SELECT_FIELDS = "id,subject,from,receivedDateTime,bodyPreview,webLink"
+MESSAGE_SELECT_FIELDS = "id,subject,from,receivedDateTime,bodyPreview,body,webLink"
 
 # Graph API ограничивает $top значением 999 за один запрос
 GRAPH_MAX_TOP = 999
@@ -293,7 +292,14 @@ def _fetch_folder_messages(
             f"Ошибка запроса писем из папки '{folder}': {exc}"
         ) from exc
 
-    return response.json().get("value", [])
+    messages = response.json().get("value", [])
+    # Graph отдаёт body словарём {contentType, content}, а bodyPreview обрезан на 255
+    # символах — код подтверждения на этом рубеже разрывался пополам. Разворачиваем
+    # тело в строку здесь, чтобы дальше по коду письмо было однородным.
+    for msg in messages:
+        if isinstance(msg.get("body"), dict):
+            msg["body"] = msg["body"].get("content") or ""
+    return messages
 
 
 def _matches(value: Optional[str], pattern: str, mode: str, case_sensitive: bool) -> bool:
