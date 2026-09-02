@@ -230,11 +230,15 @@ def retry_db(fn, what: str, tries: int = 3):
     return None
 
 
-_MAILBOX: dict[str, tuple[str, str] | None] = {}
+_MAILBOX: dict[str, tuple[str, str, str] | None] = {}
 
 
-def mailbox(email: str) -> tuple[str, str] | None:
-    """Пара `client_id` + `graph_refresh_token` ящика, один раз на прогон.
+def mailbox(email: str) -> tuple[str, str, str] | None:
+    """Доступы к ящику, один раз на прогон: `(вид, первое, второе)`.
+
+    Видов два. `outlook` — `client_id` + `graph_refresh_token`, чтение через Graph.
+    `rambler` — логин + пароль, чтение по IMAP; у этих ящиков полей Graph нет вовсе,
+    и до появления второй ветки они молча выпадали из сбора.
 
     Прежний `fetch_device_code` перечитывал строку `main_email` перед каждой
     попыткой — при опросе ящика каждые четыре секунды это лишний поход в базу
@@ -244,13 +248,16 @@ def mailbox(email: str) -> tuple[str, str] | None:
         return _MAILBOX[email]
     from backend.app.supabase_client import get_supabase
 
-    got: tuple[str, str] | None = None
+    got: tuple[str, str, str] | None = None
     try:
         row = get_supabase().table("main_email").select("*").eq("email", email).limit(1).execute()
         if row.data:
-            cid, tok = row.data[0].get("client_id"), row.data[0].get("graph_refresh_token")
+            r = row.data[0]
+            cid, tok = r.get("client_id"), r.get("graph_refresh_token")
             if cid and tok:
-                got = (str(cid), str(tok))
+                got = ("outlook", str(cid), str(tok))
+            elif email.lower().endswith("@rambler.ru") and r.get("password"):
+                got = ("rambler", email, str(r["password"]))
     except Exception as exc:
         note(f"    ящик {email} не прочитался: {exc}")
     _MAILBOX[email] = got
@@ -461,7 +468,7 @@ def free_github(station: dict, count: int, only_id: int | None) -> list[dict]:
         .select("id, login, pass_github, email")
         .eq("active", True)
         .is_("error_status", "null")
-        .ilike("email", "%@hotmail.com")
+        .or_("email.ilike.%@hotmail.com,email.ilike.%@rambler.ru")
         .order("id")
     )
     if only_id:
@@ -533,19 +540,32 @@ def start_oauth(session: str, station: dict, log: list[str]) -> bool:
     return False
 
 
-def read_code(creds: tuple[str, str], since: datetime) -> str | None:
+def read_code(creds: tuple[str, str, str], since: datetime) -> str | None:
     """Один взгляд в ящик: код подтверждения устройства или ничего."""
     from backend.app.main import _extract_verification_code
-    from outlook_mail_checker import get_mail_by_subject
 
+    kind, first, second = creds
     try:
-        mails = get_mail_by_subject(
-            client_id=creds[0],
-            refresh_token=creds[1],
-            subject=GITHUB_VERIFY_SUBJECT,
-            match_mode="exact",
-            date_from=since,
-        )
+        if kind == "rambler":
+            from rambler_imap_mail_checker import get_mail_by_subject as rambler_get_mail
+
+            mails = rambler_get_mail(
+                login=first,
+                password=second,
+                subject=GITHUB_VERIFY_SUBJECT,
+                match_mode="exact",
+                date_from=since,
+            )
+        else:
+            from outlook_mail_checker import get_mail_by_subject
+
+            mails = get_mail_by_subject(
+                client_id=first,
+                refresh_token=second,
+                subject=GITHUB_VERIFY_SUBJECT,
+                match_mode="exact",
+                date_from=since,
+            )
     except Exception:
         return None
     return _extract_verification_code(mails, 6, None, "digits")
@@ -569,7 +589,7 @@ def wait_device_code(session: str, gh: dict, log: list[str]) -> str | None:
     email = gh.get("email")
     creds = mailbox(email) if email else None
     if not creds:
-        log.append(f"у ящика {email} нет доступов Graph, кода не будет")
+        log.append(f"у ящика {email} нет ни доступов Graph, ни пароля IMAP — кода не будет")
         return None
 
     since = datetime.now(timezone.utc) - timedelta(seconds=CODE_WINDOW)
@@ -580,6 +600,9 @@ def wait_device_code(session: str, gh: dict, log: list[str]) -> str | None:
                 return code
             time.sleep(CODE_STEP)
         if approach == 1:
+            if problem_head(gh["id"]):
+                log.append("письма нет, но голова проблемная — Re-send не жму")
+                return None
             snap = ab(session, "snapshot", "-i")
             ref = ref_for(snap, "Re-send", "Resend", role="button") or ref_for(
                 snap, "Re-send", "Resend", role="link"
@@ -1100,6 +1123,31 @@ def render(rows: list[dict], station: dict, started: datetime) -> str:
     return "\n".join(lines) + "\n"
 
 
+_PROBLEM: dict[int, str] | None = None
+
+
+def problem_head(gh_id: int) -> str | None:
+    """Причина, по которой голова числится проблемным e-mail. Иначе None.
+
+    Список считает `harvest_stubborn.py` по журналам и кладёт в
+    `log/harvest_problem.json`: свои отказы (`НЕ ВОШЁЛ`, `НЕТ КОДА`) повторились,
+    и ни одного `OK` не было. Такой голове даётся ровно один заход — без второго
+    адреса и без `Re-send`: она уже показала себя, а каждая лишняя попытка стоит
+    полторы минуты браузера и очередной стук в GitHub с нашего адреса.
+
+    Файла нет — проблемных нет: сбор от нотиса не зависит.
+    """
+    global _PROBLEM
+    if _PROBLEM is None:
+        _PROBLEM = {}
+        try:
+            raw = json.loads((ROOT / "log" / "harvest_problem.json").read_text(encoding="utf-8"))
+            _PROBLEM = {int(k): str(v) for k, v in (raw.get("ids") or {}).items()}
+        except Exception:
+            pass
+    return _PROBLEM.get(int(gh_id))
+
+
 def harvest_one(gh: dict, station: dict, dry: bool, pool: list[str], turn: int) -> dict:
     """Заходы на один аккаунт: наружу отсюда не выходит ни один сбой.
 
@@ -1109,6 +1157,9 @@ def harvest_one(gh: dict, station: dict, dry: bool, pool: list[str], turn: int) 
     """
     notes: list[str] = []
     row: dict = {}
+    trouble = problem_head(gh["id"])
+    if trouble:
+        note(f"    голова числится проблемным e-mail ({trouble}) — один заход, без повторов")
     for att, proxy in enumerate(proxy_order(pool, turn)):
         note(f"→ {gh['id']} {gh.get('login') or '?'} <{gh.get('email') or '?'}>"
              f" заход {att + 1} через {proxy.split('@')[-1]}")
@@ -1125,6 +1176,10 @@ def harvest_one(gh: dict, station: dict, dry: bool, pool: list[str], turn: int) 
             }
         notes += [f"заход {att + 1}: {n}" for n in row["log"]] if att else row["log"]
         if row["status"] not in RETRY_STATUSES:
+            break
+        if trouble:
+            notes.append(f"проблемный e-mail ({trouble}) — второго захода не делаю")
+            note("    проблемный e-mail — второго захода не делаю")
             break
         # Замок GitHub временем не обойти, и второй адрес его не открывает.
         if any(locked(n) for n in row["log"]):
